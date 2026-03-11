@@ -1,0 +1,454 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "Segoe UI", Arial, sans-serif;
+  min-height: 100vh;
+  color: #3f2a34;
+  background:
+    linear-gradient(rgba(34, 20, 27, 0.42), rgba(34, 20, 27, 0.42)),
+    url("https://images.unsplash.com/photo-1604654894610-df63bc536371?auto=format&fit=crop&w=1600&q=80");
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+}
+
+.background-overlay {
+  position: fixed;
+  inset: 0;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 244, 248, 0.35),
+    rgba(255, 255, 255, 0.12)
+  );
+  z-index: 0;
+}
+
+.hero {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  padding: 30px 20px 12px;
+}
+
+.brand {
+  letter-spacing: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 12px;
+  color: white;
+  opacity: 0.95;
+}
+
+.hero h1 {
+  font-size: 48px;
+  line-height: 1.1;
+  margin-bottom: 12px;
+  font-weight: 700;
+  color: white;
+}
+
+.hero-subtitle {
+  font-size: 18px;
+  opacity: 0.95;
+  color: white;
+}
+
+.main-layout {
+  position: relative;
+  z-index: 1;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 20px 24px 48px;
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 28px;
+  align-items: start;
+}
+
+.gallery-panel {
+  display: flex;
+  align-items: stretch;
+}
+
+.gallery-card,
+.card {
+  backdrop-filter: blur(12px);
+  background: rgba(255, 250, 252, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 26px;
+  box-shadow: 0 18px 50px rgba(75, 39, 55, 0.16);
+}
+
+.gallery-card {
+  overflow: hidden;
+}
+
+.ad-card {
+  position: relative;
+  width: 100%;
+  min-height: 760px;
+  overflow: hidden;
+  padding: 0;
+}
+
+.carousel-image {
+  width: 100%;
+  height: 760px;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  transition: background-image 0.5s ease;
+}
+
+.ad-overlay {
+  position: absolute;
+  left: 28px;
+  right: 28px;
+  bottom: 28px;
+  padding: 26px 24px;
+  border-radius: 24px;
+  background: linear-gradient(
+    180deg,
+    rgba(65, 34, 47, 0.10),
+    rgba(65, 34, 47, 0.72)
+  );
+  color: white;
+  backdrop-filter: blur(8px);
+}
+
+.ad-badge {
+  display: inline-block;
+  padding: 8px 14px;
+  border-radius: 999px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+#ad-title {
+  font-size: 34px;
+  margin-bottom: 10px;
+  color: white;
+}
+
+#ad-text {
+  font-size: 17px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.form-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.card {
+  padding: 34px 28px;
+  animation: fadeIn 0.28s ease;
+}
+
+.main-card h2,
+.card h2 {
+  font-size: 32px;
+  color: #8a4f66;
+  margin-bottom: 8px;
+}
+
+.subtitle {
+  color: #7f6872;
+  margin-bottom: 22px;
+  line-height: 1.5;
+  font-size: 16px;
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+input {
+  width: 100%;
+  padding: 18px 20px;
+  border: 1px solid #ead6df;
+  border-radius: 18px;
+  font-size: 18px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #3f2a34;
+  outline: none;
+  transition: all 0.2s ease;
+  box-shadow: inset 0 1px 2px rgba(90, 56, 69, 0.03);
+}
+
+input::placeholder {
+  color: #b38d9c;
+}
+
+input:focus {
+  border-color: #d484a3;
+  box-shadow: 0 0 0 4px rgba(212, 132, 163, 0.15);
+}
+
+#phone_number {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-align: center;
+  padding: 20px;
+}
+
+button {
+  border: none;
+  border-radius: 18px;
+  padding: 16px 18px;
+  font-size: 18px;
+  font-weight: 700;
+  color: white;
+  cursor: pointer;
+  background: linear-gradient(135deg, #d86f98, #b8567e);
+  box-shadow: 0 12px 24px rgba(184, 86, 126, 0.24);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 28px rgba(184, 86, 126, 0.3);
+}
+
+.thank-you-card {
+  text-align: center;
+}
+
+.thank-you-icon {
+  font-size: 42px;
+  margin-bottom: 12px;
+}
+
+.message {
+  padding: 16px 18px;
+  border-radius: 16px;
+  font-size: 15px;
+  line-height: 1.6;
+  backdrop-filter: blur(12px);
+}
+
+.message.success {
+  background: rgba(240, 255, 245, 0.9);
+  color: #20673a;
+  border: 1px solid #c6ebd0;
+}
+
+.message.error {
+  background: rgba(255, 242, 246, 0.95);
+  color: #b04364;
+  border: 1px solid #f0c8d5;
+}
+
+.birthday-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(46, 18, 31, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  padding: 20px;
+}
+
+.birthday-modal.hidden {
+  display: none;
+}
+
+.birthday-modal-card {
+  width: 100%;
+  max-width: 460px;
+  text-align: center;
+  background: linear-gradient(180deg, #fff8fb, #ffeaf2);
+  border-radius: 28px;
+  padding: 34px 28px;
+  box-shadow: 0 28px 60px rgba(89, 45, 63, 0.28);
+  animation: birthdayPop 0.35s ease;
+}
+
+.birthday-emoji {
+  font-size: 36px;
+  margin-bottom: 14px;
+}
+
+.birthday-modal-card h2 {
+  color: #b34f78;
+  margin-bottom: 10px;
+  font-size: 32px;
+}
+
+.birthday-modal-card p {
+  color: #6f4d5b;
+  font-size: 18px;
+  line-height: 1.6;
+  margin-bottom: 20px;
+}
+
+.queue-card {
+  margin-bottom: 18px;
+}
+
+.queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.queue-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(236, 217, 225, 0.85);
+}
+
+.queue-item-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.queue-position {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #f4bfd0, #d98aa9);
+  color: #7b435a;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.queue-name {
+  font-weight: 600;
+  color: #6b4053;
+}
+
+.queue-time {
+  font-size: 14px;
+  color: #8a6d79;
+}
+
+.queue-empty {
+  color: #8a6d79;
+  font-size: 15px;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes birthdayPop {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (max-width: 980px) {
+  .main-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .hero h1 {
+    font-size: 38px;
+  }
+
+  .form-panel {
+    max-width: 620px;
+    width: 100%;
+    margin: 0 auto;
+  }
+
+  .ad-card {
+    min-height: 420px;
+  }
+
+  .carousel-image {
+    height: 420px;
+  }
+
+  #ad-title {
+    font-size: 28px;
+  }
+}
+
+@media (max-width: 600px) {
+  .hero {
+    padding-top: 24px;
+  }
+
+  .hero h1 {
+    font-size: 30px;
+  }
+
+  .hero-subtitle {
+    font-size: 16px;
+  }
+
+  .main-layout {
+    padding: 16px 16px 40px;
+  }
+
+  .card,
+  .gallery-card {
+    border-radius: 20px;
+  }
+
+  .ad-card {
+    min-height: 260px;
+  }
+
+  .carousel-image {
+    height: 260px;
+  }
+
+  .ad-overlay {
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
+    padding: 18px 16px;
+    border-radius: 18px;
+  }
+
+  #ad-title {
+    font-size: 22px;
+  }
+
+  #ad-text {
+    font-size: 14px;
+  }
+
+  .card {
+    padding: 22px 20px;
+  }
+
+  #phone_number {
+    font-size: 22px;
+  }
+}

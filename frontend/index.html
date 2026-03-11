@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nail System Check In</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="background-overlay"></div>
+
+  <header class="hero">
+    <p class="brand">NAIL SALON</p>
+    <h1>Welcome to Nail Salon</h1>
+    <p class="hero-subtitle">
+      Check in, enjoy rewards, and relax while we take care of the rest.
+    </p>
+  </header>
+
+  <main class="main-layout">
+    <section class="gallery-panel">
+      <div class="gallery-card ad-card">
+        <div class="carousel-image" id="carousel-image"></div>
+        <div class="ad-overlay">
+          <div class="ad-badge" id="ad-badge">Special Offer</div>
+          <h2 id="ad-title">Salon Rewards</h2>
+          <p id="ad-text">Visit more often and enjoy exclusive salon benefits.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="form-panel">
+      <div class="card queue-card">
+        <h2>Today's Check-In Order</h2>
+        <p class="subtitle">Customers are listed in the order they checked in.</p>
+        <div id="checkin-order-list" class="queue-list">
+          <p class="queue-empty">No customers checked in yet.</p>
+        </div>
+      </div>
+
+      <div id="phone-screen" class="card main-card">
+        <h2>Check In</h2>
+        <p class="subtitle">Enter your phone number to continue</p>
+
+        <form id="phone-form">
+          <input
+            type="text"
+            id="phone_number"
+            name="phone_number"
+            placeholder="Enter phone number"
+            inputmode="numeric"
+            autocomplete="off"
+            required
+          />
+          <button type="submit">Continue</button>
+        </form>
+      </div>
+
+      <div id="form-screen" class="card" style="display: none;">
+        <h2>New Customer</h2>
+        <p class="subtitle">Please complete your information</p>
+
+        <form id="new-customer-form">
+          <input
+            type="text"
+            name="full_name"
+            placeholder="Full Name"
+            required
+          />
+
+          <input
+            type="date"
+            name="date_of_birth"
+            required
+          />
+
+          <input
+            type="email"
+            name="email"
+            placeholder="Email (optional)"
+          />
+
+          <input
+            type="text"
+            name="referral_code"
+            placeholder="Referral Code (optional)"
+          />
+
+          <button type="submit">Check In</button>
+        </form>
+      </div>
+
+      <div id="existing-screen" class="card" style="display: none;">
+        <h2>Returning Customer</h2>
+        <p id="existing-customer-name" class="subtitle"></p>
+
+        <form id="existing-customer-form">
+          <input
+            type="text"
+            id="existing_referral_code"
+            name="existing_referral_code"
+            placeholder="Enter referral code (optional)"
+          />
+          <button type="submit">Check In</button>
+        </form>
+      </div>
+
+      <div id="thank-you-screen" class="card thank-you-card" style="display: none;">
+        <div class="thank-you-icon">✨</div>
+        <h2>Thank You!</h2>
+        <p id="thank-you-message" class="subtitle">
+          You are checked in. Please take a seat and relax.
+        </p>
+        <button type="button" id="back-home-btn">Back to Home</button>
+      </div>
+
+      <div id="message" class="message"></div>
+    </section>
+  </main>
+
+  <div id="birthday-modal" class="birthday-modal hidden">
+    <div class="birthday-modal-card">
+      <div class="birthday-emoji">🎉🎂🎉</div>
+      <h2>Happy Birthday!</h2>
+      <p id="birthday-modal-text">You have $10 off today.</p>
+      <button type="button" id="close-birthday-modal">Awesome</button>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
