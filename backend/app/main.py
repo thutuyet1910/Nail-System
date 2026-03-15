@@ -28,6 +28,7 @@ def get_unique_referral_code(db: Session) -> str:
         if not existing:
             return code
 
+# Birthday helpers
 
 def days_until_next_birthday(dob: date) -> int:
     today = date.today()
@@ -41,9 +42,8 @@ def days_until_next_birthday(dob: date) -> int:
     return (next_birthday - today).days
 
 
-def is_birthday_window(dob: date) -> bool:
-    days_left = days_until_next_birthday(dob)
-    return 0 <= days_left <= 5
+def is_birthday_month(dob: date) -> bool:
+    return dob.month == date.today().month
 
 
 def is_exact_birthday(dob: date) -> bool:
@@ -56,6 +56,38 @@ def should_reset_birthday_reminder(customer, today: date) -> bool:
         return False
     return customer.birthday_reminder_sent_date.year < today.year
 
+# Birthday discount helpers (old-customer rules)
+
+def _birthday_discount_eligible(customer) -> bool:
+    if not customer.date_of_birth:
+        return False
+
+    current_month_key = date.today().strftime("%Y-%m")
+    already_used = (customer.birthday_discount_used_month == current_month_key)
+
+    return is_exact_birthday(customer.date_of_birth) and not already_used
+
+def _apply_birthday_discount(customer, db: Session) -> bool:
+    if not _birthday_discount_eligible(customer):
+        return False
+    customer.birthday_discount_used_month = date.today().strftime("%Y-%m")
+    db.add(customer)
+    return True 
+
+# Referral discount helpers (old-customer rules)
+
+def _referral_discount_eligible(customer) -> bool:
+    return bool(customer.referral_discount_pending)
+
+ 
+def _apply_referral_discount(customer, db: Session) -> bool:
+    if not _referral_discount_eligible(customer):
+        return False
+    customer.referral_discount_pending = False
+    db.add(customer)
+    return True
+
+# Scheduled birthday email job
 
 def run_scheduled_birthday_reminders():
     db = SessionLocal()
@@ -114,6 +146,7 @@ def run_scheduled_birthday_reminders():
         db.close()
 
 # change the time and minutes back when done developing
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not scheduler.running:
@@ -156,6 +189,7 @@ app.add_middleware(
 def read_root():
     return {"message": "Nail System API is running"}
 
+# NEW CUSTOMER — registration
 
 @app.post("/customers/new", response_model=schemas.CustomerResponse, status_code=201)
 def create_new_customer(customer: schemas.CustomerCreate, db: Session = Depends(get_db)):
@@ -172,10 +206,13 @@ def create_new_customer(customer: schemas.CustomerCreate, db: Session = Depends(
         full_name=customer.full_name.strip(),
         phone_number=customer.phone_number.strip(),
         email=(customer.email or "").strip() or None,
-        date_of_birth=customer.date_of_birth,
+        date_of_birth=customer.date_of_birth,        
         referral_code=None,
+        referral_count=0,
         referral_discount_percent=10,
+        referral_discount_pending=False,               
         birthday_discount_amount=10,
+        birthday_discount_used_month=None,
         visit_count_cycle=0,
         used_referral_code=None,
         used_referral_from_customer_id=None,
@@ -186,6 +223,7 @@ def create_new_customer(customer: schemas.CustomerCreate, db: Session = Depends(
     db.refresh(new_customer)
     return new_customer
 
+# CUSTOMER LIST & LOOKUP
 
 @app.get("/customers", response_model=list[schemas.CustomerResponse])
 def get_all_customers(db: Session = Depends(get_db)):
@@ -205,6 +243,7 @@ def get_customer_by_phone(phone_number: str, db: Session = Depends(get_db)):
 
     return customer
 
+# CHECK-IN STATUS
 
 @app.get("/customers/check-in-status/{phone_number}")
 def get_check_in_status(phone_number: str, db: Session = Depends(get_db)):
@@ -233,6 +272,8 @@ def get_check_in_status(phone_number: str, db: Session = Depends(get_db)):
         "full_name": customer.full_name,
         "already_checked_in_today": existing_visit_today is not None,
     }
+
+# TODAY'S CHECK-IN
 
 @app.get("/today-checkins")
 def get_today_checkins(db: Session = Depends(get_db)):
@@ -294,9 +335,27 @@ def check_in_customer(phone_number: str, db: Session = Depends(get_db)):
 
     customer.visit_count_cycle += 1
 
-    # Change back to >= 5 later for the real rule
+    # Unlock referral code after 5 visits in the cycle
     if customer.visit_count_cycle >= 5 and not customer.referral_code:
         customer.referral_code = get_unique_referral_code(db)
+
+    discounts_applied = []
+
+    # OLD CUSTOMER DISCOUNT LOGIC
+    if _apply_birthday_discount(customer, db):
+        discounts_applied.append({
+            "type": "birthday",
+            "description": f"🎂 ${customer.birthday_discount_amount} birthday discount",
+            "amount": customer.birthday_discount_amount,
+        })
+
+    if _apply_referral_discount(customer, db):
+        discounts_applied.append({
+            "type": "referral",
+            "description": f"🎉 {customer.referral_discount_percent}% referral discount",
+            "percent": customer.referral_discount_percent,
+        })
+
 
     db.commit()
     db.refresh(customer)
@@ -317,10 +376,12 @@ def check_in_customer(phone_number: str, db: Session = Depends(get_db)):
         "visit_count_cycle": customer.visit_count_cycle,
         "referral_code": customer.referral_code,
         "referral_discount_percent": customer.referral_discount_percent,
-        "birthday_discount_available": birthday_discount_available,
+        "birthday_discount_available": _birthday_discount_eligible(customer),
         "birthday_discount_amount": customer.birthday_discount_amount,
+        "discounts_applied": discounts_applied,
     }
 
+# REFERRAL — apply a code (new customer enters someone's code)
 
 @app.post("/referrals/apply", response_model=schemas.ApplyReferralCodeResponse)
 def apply_referral_code(payload: schemas.ApplyReferralCodeRequest, db: Session = Depends(get_db)):
@@ -333,6 +394,13 @@ def apply_referral_code(payload: schemas.ApplyReferralCodeRequest, db: Session =
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found.")
 
+
+    if customer.used_referral_code:
+        raise HTTPException(
+            status_code=400,
+            detail="You have already used a referral code.",
+        )
+
     entered_code = payload.referral_code.strip().upper()
 
     code_owner = (
@@ -342,31 +410,32 @@ def apply_referral_code(payload: schemas.ApplyReferralCodeRequest, db: Session =
     )
 
     if not code_owner:
-        raise HTTPException(
-            status_code=404,
-            detail="Referral code is invalid or already used."
-        )
+        raise HTTPException(status_code=404, detail="Referral code not found.")
 
-    usage = models.ReferralUsage(
-        code=entered_code,
-        code_owner_customer_id=code_owner.id,
-        used_by_customer_id=customer.id,
-        used_on=date.today(),
-    )
-    db.add(usage)
+    if code_owner.id == customer.id:
+        raise HTTPException(status_code=400, detail="You cannot use your own referral code.")
+
 
     customer.used_referral_code = entered_code
     customer.used_referral_from_customer_id = code_owner.id
 
-    code_owner.referral_code = None
-    code_owner.visit_count_cycle = 0
+    code_owner.referral_count = (code_owner.referral_count or 0) + 1
+
+    if code_owner.referral_count == 3 and not code_owner.referral_discount_pending:
+        code_owner.referral_discount_pending = True
+        # In production, trigger a real push/SMS/email notification here
+        print(
+            f"[NOTIFICATION] {code_owner.full_name} earned a 10% referral discount "
+            f"(referred {code_owner.referral_count} people)!"
+        )
+
 
     db.commit()
     db.refresh(customer)
     db.refresh(code_owner)
 
     return {
-        "message": "Referral code has been activated. 10% discount on all services.",
+        "message": "Referral code accepted successfully.",
         "phone_number": customer.phone_number,
         "full_name": customer.full_name,
         "used_referral_code": entered_code,
@@ -374,6 +443,47 @@ def apply_referral_code(payload: schemas.ApplyReferralCodeRequest, db: Session =
         "discount_percent": 10,
     }
 
+# OLD CUSTOMER — update phone number
+
+@app.patch("/customers/{phone_number}/update-phone", response_model=schemas.CustomerResponse)
+def update_phone_number(
+    phone_number: str,
+    payload: schemas.UpdatePhoneRequest,
+    db: Session = Depends(get_db),
+):
+ customer = (
+        db.query(models.Customer)
+        .filter(models.Customer.phone_number == phone_number.strip())
+        .first()
+    )
+ if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found.")
+ 
+ new_phone = payload.new_phone_number.strip()
+ 
+ if customer.phone_number == new_phone:
+        raise HTTPException(
+            status_code=400,
+            detail="New phone number is the same as the current one.",
+        )
+ 
+ conflict = (
+        db.query(models.Customer)
+        .filter(models.Customer.phone_number == new_phone)
+        .first()
+  )
+ if conflict:
+        raise HTTPException(
+            status_code=400,
+            detail="That phone number is already in use by another account.",
+        )
+ 
+ customer.phone_number = new_phone
+ db.commit()
+ db.refresh(customer)
+ return customer
+
+# VISITS
 
 @app.get("/customers/{phone_number}/visits")
 def get_customer_visits(phone_number: str, db: Session = Depends(get_db)):
@@ -399,10 +509,14 @@ def get_customer_visits(phone_number: str, db: Session = Depends(get_db)):
         "visit_count_cycle": customer.visit_count_cycle,
         "visits": [{"id": v.id, "visit_date": v.visit_date} for v in visits],
         "referral_code": customer.referral_code,
+        "referral_count": customer.referral_count,
+        "referral_discount_pending": customer.referral_discount_pending,
         "used_referral_code": customer.used_referral_code,
         "used_referral_from_customer_id": customer.used_referral_from_customer_id,
     }
 
+
+# BIRTHDAY REMINDERS
 
 @app.get("/birthday-reminders", response_model=list[schemas.BirthdayReminderResponse])
 def get_upcoming_birthday_reminders(db: Session = Depends(get_db)):

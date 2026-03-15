@@ -18,8 +18,11 @@ class CustomerResponse(BaseModel):
     email: Optional[str] = None
     date_of_birth: date
     referral_code: Optional[str] = None
+    referral_count: int = 0 
     referral_discount_percent: int
+    referral_discount_pending: bool = False   
     birthday_discount_amount: int
+    birthday_discount_used_month: Optional[str] = None
     visit_count_cycle: int
     used_referral_code: Optional[str] = None
     used_referral_from_customer_id: Optional[int] = None
@@ -38,6 +41,7 @@ class CheckInResponse(BaseModel):
     referral_discount_percent: int
     birthday_discount_available: bool
     birthday_discount_amount: int
+    discounts_applied: list = []
 
 
 class ApplyReferralCodeRequest(BaseModel):
@@ -75,3 +79,6 @@ class TodayCheckInItem(BaseModel):
 
 class TodayCheckInResponse(BaseModel):
     checkins: list[TodayCheckInItem]    
+
+class UpdatePhoneRequest(BaseModel):
+    new_phone_number: str

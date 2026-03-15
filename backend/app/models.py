@@ -14,8 +14,12 @@ class Customer(Base):
     date_of_birth = Column(Date, nullable=False)
 
     referral_code = Column(String, unique=True, nullable=True)
+    referral_count = Column(Integer, default=0, nullable=False)
     referral_discount_percent = Column(Integer, default=10)
+    referral_discount_pending = Column(Boolean, default=False, nullable=False)
+
     birthday_discount_amount = Column(Integer, default=10)
+    birthday_discount_used_month = Column(String, nullable=True) 
 
     visit_count_cycle = Column(Integer, default=0)
 
