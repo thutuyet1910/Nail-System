@@ -26,6 +26,8 @@ class Customer(Base):
     used_referral_code = Column(String, nullable=True)
     used_referral_from_customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True)
 
+    visit_discount_pending = Column(Boolean, default=False, nullable=False)
+
     birthday_reminder_sent = Column(Boolean, default=False)
     birthday_reminder_sent_date = Column(Date, nullable=True)
 

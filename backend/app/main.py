@@ -42,10 +42,6 @@ def days_until_next_birthday(dob: date) -> int:
     return (next_birthday - today).days
 
 
-def is_birthday_month(dob: date) -> bool:
-    return dob.month == date.today().month
-
-
 def is_exact_birthday(dob: date) -> bool:
     today = date.today()
     return dob.month == today.month and dob.day == today.day
@@ -64,7 +60,6 @@ def _birthday_discount_eligible(customer) -> bool:
 
     current_month_key = date.today().strftime("%Y-%m")
     already_used = (customer.birthday_discount_used_month == current_month_key)
-
     return is_exact_birthday(customer.date_of_birth) and not already_used
 
 def _apply_birthday_discount(customer, db: Session) -> bool:
@@ -84,6 +79,19 @@ def _apply_referral_discount(customer, db: Session) -> bool:
     if not _referral_discount_eligible(customer):
         return False
     customer.referral_discount_pending = False
+    db.add(customer)
+    return True
+
+# Visit milestone discount helpers
+
+def _visit_discount_eligible(customer) -> bool:
+    return bool(customer.visit_discount_pending)
+
+def _apply_visit_discount(customer, db: Session) -> bool:
+    if not _visit_discount_eligible(customer):
+        return False
+    customer.visit_discount_pending = False
+
     db.add(customer)
     return True
 
@@ -145,7 +153,7 @@ def run_scheduled_birthday_reminders():
     finally:
         db.close()
 
-# change the time and minutes back when done developing
+# Lifespan (scheduler)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -298,6 +306,8 @@ def get_today_checkins(db: Session = Depends(get_db)):
 
     return {"checkins": result}
 
+# Check-in (applies discounts)
+
 @app.post("/customers/check-in/{phone_number}", response_model=schemas.CheckInResponse)
 def check_in_customer(phone_number: str, db: Session = Depends(get_db)):
     customer = (
@@ -356,6 +366,17 @@ def check_in_customer(phone_number: str, db: Session = Depends(get_db)):
             "percent": customer.referral_discount_percent,
         })
 
+    if _apply_visit_discount(customer, db):
+        discounts_applied.append({
+            "type": "loyalty",
+            "description": "⭐ 10% loyalty discount (every 10th visit reward)",
+            "percent": 10,
+        })
+
+    if customer.visit_count_cycle % 10 == 0:
+        customer.visit_discount_pending = True
+        print(f"[NOTIFICATION] {customer.full_name} earned a 10% loyalty discount (visit #{customer.visit_count_cycle})!")
+
 
     db.commit()
     db.refresh(customer)
@@ -366,7 +387,6 @@ def check_in_customer(phone_number: str, db: Session = Depends(get_db)):
         .count()
     )
 
-    birthday_discount_available = is_exact_birthday(customer.date_of_birth)
 
     return {
         "message": "Customer checked in successfully.",

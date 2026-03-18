@@ -20,7 +20,8 @@ class CustomerResponse(BaseModel):
     referral_code: Optional[str] = None
     referral_count: int = 0 
     referral_discount_percent: int
-    referral_discount_pending: bool = False   
+    referral_discount_pending: bool = False  
+    visit_discount_pending: bool = False
     birthday_discount_amount: int
     birthday_discount_used_month: Optional[str] = None
     visit_count_cycle: int
