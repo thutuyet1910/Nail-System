@@ -203,7 +203,7 @@ def read_root():
 def create_new_customer(customer: schemas.CustomerCreate, db: Session = Depends(get_db)):
     existing_customer = (
         db.query(models.Customer)
-        .filter(models.Customer.phone_number == customer.phone_number.strip())
+        .filter(models.Customer.phone_number == customer.phone_number)
         .first()
     )
 
@@ -407,7 +407,7 @@ def check_in_customer(phone_number: str, db: Session = Depends(get_db)):
 def apply_referral_code(payload: schemas.ApplyReferralCodeRequest, db: Session = Depends(get_db)):
     customer = (
         db.query(models.Customer)
-        .filter(models.Customer.phone_number == payload.phone_number.strip())
+        .filter(models.Customer.phone_number == payload.phone_number)
         .first()
     )
 

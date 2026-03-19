@@ -68,6 +68,11 @@ function renderSlide(index) {
   if (adText) adText.textContent = slide.text;
 }
 
+function buildDiscountMessage(discounts) {
+    if (!discounts || discounts.length === 0) return "";
+    return discounts.map(d => d.description).join(" · ");
+}
+
 function startCarousel() {
   if (!carouselImage) return;
 

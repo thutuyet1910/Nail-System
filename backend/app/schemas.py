@@ -14,7 +14,11 @@ class CustomerCreate(BaseModel):
 class CustomerResponse(BaseModel):
     id: int
     full_name: str
+<<<<<<< Updated upstream
     phone_number: str
+=======
+    phone_number: str    
+>>>>>>> Stashed changes
     email: Optional[str] = None
     date_of_birth: date
     referral_code: Optional[str] = None
@@ -28,9 +32,12 @@ class CustomerResponse(BaseModel):
     used_referral_code: Optional[str] = None
     used_referral_from_customer_id: Optional[int] = None
 
-    class Config:
-        from_attributes = True
-
+    @computed_field
+    @property
+    def phone_number_formatted(self) -> str:
+        return format_phone_display(self.phone_number)
+    
+    model_config = {"from_attributes": True}
 
 class CheckInResponse(BaseModel):
     message: str
@@ -74,8 +81,7 @@ class TodayCheckInItem(BaseModel):
     phone_number: str
     checked_in_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class TodayCheckInResponse(BaseModel):
