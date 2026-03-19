@@ -38,62 +38,42 @@
         </div>
       </div>
 
+      <!-- Phone lookup -->
       <div id="phone-screen" class="card main-card">
         <h2>Check In</h2>
         <p class="subtitle">Enter your phone number to continue</p>
-
         <form id="phone-form">
           <input
             type="text"
             id="phone_number"
             name="phone_number"
-            placeholder="Enter phone number"
+            placeholder="(555) 000-0000"
             inputmode="numeric"
             autocomplete="off"
+            maxlength="14"
             required
           />
           <button type="submit">Continue</button>
         </form>
       </div>
 
+      <!-- New customer registration -->
       <div id="form-screen" class="card" style="display: none;">
         <h2>New Customer</h2>
         <p class="subtitle">Please complete your information</p>
-
         <form id="new-customer-form">
-          <input
-            type="text"
-            name="full_name"
-            placeholder="Full Name"
-            required
-          />
-
-          <input
-            type="date"
-            name="date_of_birth"
-            required
-          />
-
-          <input
-            type="email"
-            name="email"
-            placeholder="Email (optional)"
-          />
-
-          <input
-            type="text"
-            name="referral_code"
-            placeholder="Referral Code (optional)"
-          />
-
+          <input type="text" name="full_name" placeholder="Full Name" required />
+          <input type="date" name="date_of_birth" required />
+          <input type="email" name="email" placeholder="Email (optional)" />
+          <input type="text" name="referral_code" placeholder="Referral Code (optional)" />
           <button type="submit">Check In</button>
         </form>
       </div>
 
+      <!-- Returning customer -->
       <div id="existing-screen" class="card" style="display: none;">
         <h2>Returning Customer</h2>
         <p id="existing-customer-name" class="subtitle"></p>
-
         <form id="existing-customer-form">
           <input
             type="text"
@@ -103,8 +83,47 @@
           />
           <button type="submit">Check In</button>
         </form>
+        <button type="button" id="update-phone-btn" class="secondary-btn">
+          Update Phone Number
+        </button>
       </div>
 
+      <!-- Update phone number -->
+      <div id="update-phone-screen" class="card" style="display: none;">
+        <h2>Update Phone Number</h2>
+        <p class="subtitle">Your rewards, visit history, and discounts are all kept.</p>
+        <form id="update-phone-form">
+          <input
+            type="text"
+            id="current_phone"
+            name="current_phone"
+            placeholder="Current phone: (555) 000-0000"
+            inputmode="numeric"
+            maxlength="14"
+            required
+          />
+          <input
+            type="text"
+            id="new_phone"
+            name="new_phone"
+            placeholder="New phone: (555) 000-0001"
+            inputmode="numeric"
+            maxlength="14"
+            required
+          />
+          <div class="rewards-kept">
+            <p>✓ Birthday discount kept</p>
+            <p>✓ Referral rewards kept</p>
+            <p>✓ Loyalty visits kept</p>
+          </div>
+          <button type="submit">Update Phone Number</button>
+        </form>
+        <button type="button" id="cancel-update-phone-btn" class="secondary-btn">
+          Cancel
+        </button>
+      </div>
+
+      <!-- Thank you -->
       <div id="thank-you-screen" class="card thank-you-card" style="display: none;">
         <div class="thank-you-icon">✨</div>
         <h2>Thank You!</h2>

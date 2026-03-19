@@ -14,6 +14,8 @@ from . import models, schemas
 from .database import Base, engine, get_db, SessionLocal
 from .email_utils import send_birthday_email
 
+import re
+
 Base.metadata.create_all(bind=engine)
 
 
@@ -27,6 +29,12 @@ def get_unique_referral_code(db: Session) -> str:
         existing = db.query(models.Customer).filter(models.Customer.referral_code == code).first()
         if not existing:
             return code
+        
+def _normalize_phone(phone: str) -> str:
+    digits = re.sub(r"\D", "", phone)
+    if len(digits) != 10:
+        raise HTTPException(status_code=422, detail="Phone number must be exactly 10 digits.")
+    return digits
 
 # Birthday helpers
 
@@ -212,7 +220,7 @@ def create_new_customer(customer: schemas.CustomerCreate, db: Session = Depends(
 
     new_customer = models.Customer(
         full_name=customer.full_name.strip(),
-        phone_number=customer.phone_number.strip(),
+        phone_number=customer.phone_number,
         email=(customer.email or "").strip() or None,
         date_of_birth=customer.date_of_birth,        
         referral_code=None,
@@ -222,6 +230,7 @@ def create_new_customer(customer: schemas.CustomerCreate, db: Session = Depends(
         birthday_discount_amount=10,
         birthday_discount_used_month=None,
         visit_count_cycle=0,
+        visit_discount_pending=False,
         used_referral_code=None,
         used_referral_from_customer_id=None,
     )
@@ -242,7 +251,7 @@ def get_all_customers(db: Session = Depends(get_db)):
 def get_customer_by_phone(phone_number: str, db: Session = Depends(get_db)):
     customer = (
         db.query(models.Customer)
-        .filter(models.Customer.phone_number == phone_number.strip())
+        .filter(models.Customer.phone_number == _normalize_phone(phone_number))
         .first()
     )
 
@@ -257,7 +266,7 @@ def get_customer_by_phone(phone_number: str, db: Session = Depends(get_db)):
 def get_check_in_status(phone_number: str, db: Session = Depends(get_db)):
     customer = (
         db.query(models.Customer)
-        .filter(models.Customer.phone_number == phone_number.strip())
+        .filter(models.Customer.phone_number == _normalize_phone(phone_number))
         .first()
     )
 
@@ -312,7 +321,7 @@ def get_today_checkins(db: Session = Depends(get_db)):
 def check_in_customer(phone_number: str, db: Session = Depends(get_db)):
     customer = (
         db.query(models.Customer)
-        .filter(models.Customer.phone_number == phone_number.strip())
+        .filter(models.Customer.phone_number == _normalize_phone(phone_number))
         .first()
     )
 
@@ -471,37 +480,37 @@ def update_phone_number(
     payload: schemas.UpdatePhoneRequest,
     db: Session = Depends(get_db),
 ):
- customer = (
+    customer = (
         db.query(models.Customer)
-        .filter(models.Customer.phone_number == phone_number.strip())
+        .filter(models.Customer.phone_number == _normalize_phone(phone_number))
         .first()
     )
- if not customer:
+    if not customer:
         raise HTTPException(status_code=404, detail="Customer not found.")
  
- new_phone = payload.new_phone_number.strip()
+    new_phone = payload.new_phone_number
  
- if customer.phone_number == new_phone:
+    if customer.phone_number == new_phone:
         raise HTTPException(
             status_code=400,
             detail="New phone number is the same as the current one.",
         )
  
- conflict = (
+    conflict = (
         db.query(models.Customer)
         .filter(models.Customer.phone_number == new_phone)
         .first()
-  )
- if conflict:
+    )
+    if conflict:
         raise HTTPException(
             status_code=400,
             detail="That phone number is already in use by another account.",
         )
  
- customer.phone_number = new_phone
- db.commit()
- db.refresh(customer)
- return customer
+    customer.phone_number = new_phone
+    db.commit()
+    db.refresh(customer)
+    return customer
 
 # VISITS
 
@@ -509,7 +518,7 @@ def update_phone_number(
 def get_customer_visits(phone_number: str, db: Session = Depends(get_db)):
     customer = (
         db.query(models.Customer)
-        .filter(models.Customer.phone_number == phone_number.strip())
+        .filter(models.Customer.phone_number == _normalize_phone(phone_number))
         .first()
     )
 

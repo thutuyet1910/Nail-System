@@ -1,7 +1,16 @@
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field, field_validator
 from datetime import date, datetime
+import re
 
+def format_phone_display(digits: str) -> str:
+    return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+
+def validate_phone(v: str) -> str:
+    digits_only = re.sub(r"\D", "", v)
+    if len(digits_only) != 10:
+        raise ValueError("Phone number must be exactly 10 digits.")
+    return digits_only
 
 class CustomerCreate(BaseModel):
     full_name: str
@@ -10,15 +19,16 @@ class CustomerCreate(BaseModel):
     date_of_birth: date
     referral_code: Optional[str] = None
 
+    @field_validator("phone_number")
+    @classmethod
+    def check_phone(cls, v: str) -> str:
+        return validate_phone(v)
+
 
 class CustomerResponse(BaseModel):
     id: int
     full_name: str
-<<<<<<< Updated upstream
     phone_number: str
-=======
-    phone_number: str    
->>>>>>> Stashed changes
     email: Optional[str] = None
     date_of_birth: date
     referral_code: Optional[str] = None
@@ -56,6 +66,11 @@ class ApplyReferralCodeRequest(BaseModel):
     phone_number: str
     referral_code: str
 
+    @field_validator("phone_number")
+    @classmethod
+    def check_phone(cls, v: str) -> str:
+        return validate_phone(v)
+
 
 class ApplyReferralCodeResponse(BaseModel):
     message: str
@@ -89,3 +104,8 @@ class TodayCheckInResponse(BaseModel):
 
 class UpdatePhoneRequest(BaseModel):
     new_phone_number: str
+
+    @field_validator("new_phone_number")
+    @classmethod
+    def check_phone(cls, v: str) -> str:
+        return validate_phone(v)

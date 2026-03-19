@@ -1,0 +1,11 @@
+{
+  "ExpandedNodes": [
+    "",
+    "\\.pytest_cache",
+    "\\backend",
+    "\\backend\\app",
+    "\\frontend"
+  ],
+  "SelectedNode": "\\backend\\app\\test_main.py",
+  "PreviewInSolutionExplorer": false
+}
