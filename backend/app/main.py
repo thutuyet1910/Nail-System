@@ -1,6 +1,7 @@
 from datetime import date, datetime
 import random
 import string
+import re
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,9 +13,7 @@ from .scheduler import scheduler
 
 from . import models, schemas
 from .database import Base, engine, get_db, SessionLocal
-from .email_utils import send_birthday_email
-
-import re
+from .email_utils import send_birthday_email, send_referral_discount_email
 
 Base.metadata.create_all(bind=engine)
 
@@ -29,12 +28,14 @@ def get_unique_referral_code(db: Session) -> str:
         existing = db.query(models.Customer).filter(models.Customer.referral_code == code).first()
         if not existing:
             return code
-        
+
+
 def _normalize_phone(phone: str) -> str:
     digits = re.sub(r"\D", "", phone)
     if len(digits) != 10:
         raise HTTPException(status_code=422, detail="Phone number must be exactly 10 digits.")
     return digits
+
 
 # Birthday helpers
 
@@ -60,7 +61,8 @@ def should_reset_birthday_reminder(customer, today: date) -> bool:
         return False
     return customer.birthday_reminder_sent_date.year < today.year
 
-# Birthday discount helpers (old-customer rules)
+
+# Birthday discount helpers
 
 def _birthday_discount_eligible(customer) -> bool:
     if not customer.date_of_birth:
@@ -70,19 +72,21 @@ def _birthday_discount_eligible(customer) -> bool:
     already_used = (customer.birthday_discount_used_month == current_month_key)
     return is_exact_birthday(customer.date_of_birth) and not already_used
 
+
 def _apply_birthday_discount(customer, db: Session) -> bool:
     if not _birthday_discount_eligible(customer):
         return False
     customer.birthday_discount_used_month = date.today().strftime("%Y-%m")
     db.add(customer)
-    return True 
+    return True
 
-# Referral discount helpers (old-customer rules)
+
+# Referral discount helpers
 
 def _referral_discount_eligible(customer) -> bool:
     return bool(customer.referral_discount_pending)
 
- 
+
 def _apply_referral_discount(customer, db: Session) -> bool:
     if not _referral_discount_eligible(customer):
         return False
@@ -90,18 +94,20 @@ def _apply_referral_discount(customer, db: Session) -> bool:
     db.add(customer)
     return True
 
+
 # Visit milestone discount helpers
 
 def _visit_discount_eligible(customer) -> bool:
     return bool(customer.visit_discount_pending)
 
+
 def _apply_visit_discount(customer, db: Session) -> bool:
     if not _visit_discount_eligible(customer):
         return False
     customer.visit_discount_pending = False
-
     db.add(customer)
     return True
+
 
 # Scheduled birthday email job
 
@@ -161,21 +167,14 @@ def run_scheduled_birthday_reminders():
     finally:
         db.close()
 
-# Lifespan (scheduler)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not scheduler.running:
         scheduler.add_job(
             run_scheduled_birthday_reminders,
-            #
-            #"cron",
-            #hour=9,
-            #minute=0,
-
             "interval",
             minutes=1,
-            
             timezone=ZoneInfo("America/Phoenix"),
             id="daily_birthday_reminders",
             replace_existing=True,
@@ -205,13 +204,16 @@ app.add_middleware(
 def read_root():
     return {"message": "Nail System API is running"}
 
+
 # NEW CUSTOMER — registration
 
 @app.post("/customers/new", response_model=schemas.CustomerResponse, status_code=201)
 def create_new_customer(customer: schemas.CustomerCreate, db: Session = Depends(get_db)):
+    normalized_phone = _normalize_phone(customer.phone_number)
+
     existing_customer = (
         db.query(models.Customer)
-        .filter(models.Customer.phone_number == customer.phone_number)
+        .filter(models.Customer.phone_number == normalized_phone)
         .first()
     )
 
@@ -220,13 +222,13 @@ def create_new_customer(customer: schemas.CustomerCreate, db: Session = Depends(
 
     new_customer = models.Customer(
         full_name=customer.full_name.strip(),
-        phone_number=customer.phone_number,
+        phone_number=normalized_phone,
         email=(customer.email or "").strip() or None,
-        date_of_birth=customer.date_of_birth,        
+        date_of_birth=customer.date_of_birth,
         referral_code=None,
         referral_count=0,
         referral_discount_percent=10,
-        referral_discount_pending=False,               
+        referral_discount_pending=False,
         birthday_discount_amount=10,
         birthday_discount_used_month=None,
         visit_count_cycle=0,
@@ -239,6 +241,7 @@ def create_new_customer(customer: schemas.CustomerCreate, db: Session = Depends(
     db.commit()
     db.refresh(new_customer)
     return new_customer
+
 
 # CUSTOMER LIST & LOOKUP
 
@@ -259,6 +262,7 @@ def get_customer_by_phone(phone_number: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Customer not found.")
 
     return customer
+
 
 # CHECK-IN STATUS
 
@@ -290,6 +294,7 @@ def get_check_in_status(phone_number: str, db: Session = Depends(get_db)):
         "already_checked_in_today": existing_visit_today is not None,
     }
 
+
 # TODAY'S CHECK-IN
 
 @app.get("/today-checkins")
@@ -314,6 +319,7 @@ def get_today_checkins(db: Session = Depends(get_db)):
         })
 
     return {"checkins": result}
+
 
 # Check-in (applies discounts)
 
@@ -346,21 +352,19 @@ def check_in_customer(phone_number: str, db: Session = Depends(get_db)):
         )
 
     new_visit = models.Visit(
-    customer_id=customer.id,
-    visit_date=today,
-    checked_in_at=datetime.now()
+        customer_id=customer.id,
+        visit_date=today,
+        checked_in_at=datetime.now()
     )
     db.add(new_visit)
 
     customer.visit_count_cycle += 1
 
-    # Unlock referral code after 5 visits in the cycle
     if customer.visit_count_cycle >= 5 and not customer.referral_code:
         customer.referral_code = get_unique_referral_code(db)
 
     discounts_applied = []
 
-    # OLD CUSTOMER DISCOUNT LOGIC
     if _apply_birthday_discount(customer, db):
         discounts_applied.append({
             "type": "birthday",
@@ -386,7 +390,6 @@ def check_in_customer(phone_number: str, db: Session = Depends(get_db)):
         customer.visit_discount_pending = True
         print(f"[NOTIFICATION] {customer.full_name} earned a 10% loyalty discount (visit #{customer.visit_count_cycle})!")
 
-
     db.commit()
     db.refresh(customer)
 
@@ -395,7 +398,6 @@ def check_in_customer(phone_number: str, db: Session = Depends(get_db)):
         .filter(models.Visit.customer_id == customer.id)
         .count()
     )
-
 
     return {
         "message": "Customer checked in successfully.",
@@ -410,19 +412,21 @@ def check_in_customer(phone_number: str, db: Session = Depends(get_db)):
         "discounts_applied": discounts_applied,
     }
 
+
 # REFERRAL — apply a code (new customer enters someone's code)
 
 @app.post("/referrals/apply", response_model=schemas.ApplyReferralCodeResponse)
 def apply_referral_code(payload: schemas.ApplyReferralCodeRequest, db: Session = Depends(get_db)):
+    normalized_phone = _normalize_phone(payload.phone_number)
+
     customer = (
         db.query(models.Customer)
-        .filter(models.Customer.phone_number == payload.phone_number)
+        .filter(models.Customer.phone_number == normalized_phone)
         .first()
     )
 
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found.")
-
 
     if customer.used_referral_code:
         raise HTTPException(
@@ -444,33 +448,49 @@ def apply_referral_code(payload: schemas.ApplyReferralCodeRequest, db: Session =
     if code_owner.id == customer.id:
         raise HTTPException(status_code=400, detail="You cannot use your own referral code.")
 
-
     customer.used_referral_code = entered_code
     customer.used_referral_from_customer_id = code_owner.id
 
     code_owner.referral_count = (code_owner.referral_count or 0) + 1
 
-    if code_owner.referral_count == 3 and not code_owner.referral_discount_pending:
-        code_owner.referral_discount_pending = True
-        # In production, trigger a real push/SMS/email notification here
-        print(
-            f"[NOTIFICATION] {code_owner.full_name} earned a 10% referral discount "
-            f"(referred {code_owner.referral_count} people)!"
-        )
-
+    if not code_owner.referral_discount_pending:
+        if code_owner.referral_count == 3:
+            code_owner.referral_discount_pending = True
+            code_owner.referral_discount_percent = 10
+            print(f"[NOTIFICATION] {code_owner.full_name} earned a 10% referral discount (referred {code_owner.referral_count} people)!")
+        elif code_owner.referral_count == 8:
+            code_owner.referral_discount_pending = True
+            code_owner.referral_discount_percent = 15
+            print(f"[NOTIFICATION] {code_owner.full_name} earned a 15% referral discount (referred {code_owner.referral_count} people)!")
+        elif code_owner.referral_count == 18:
+            code_owner.referral_discount_pending = True
+            code_owner.referral_discount_percent = 20
+            print(f"[NOTIFICATION] {code_owner.full_name} earned a 20% referral discount (referred {code_owner.referral_count} people)!")
 
     db.commit()
     db.refresh(customer)
     db.refresh(code_owner)
 
+    if customer.email:
+        try:
+            send_referral_discount_email(
+                to_email=customer.email,
+                customer_name=customer.full_name,
+                referrer_name=code_owner.full_name,
+                discount_percent=10,
+            )
+        except Exception as e:
+            print(f"Failed to send referral discount email to {customer.email}: {e}")
+
     return {
-        "message": "Referral code accepted successfully.",
+        "message": "Referral code accepted successfully. You received 10% off today.",
         "phone_number": customer.phone_number,
         "full_name": customer.full_name,
         "used_referral_code": entered_code,
         "referral_from_customer_name": code_owner.full_name,
         "discount_percent": 10,
     }
+
 
 # OLD CUSTOMER — update phone number
 
@@ -487,15 +507,15 @@ def update_phone_number(
     )
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found.")
- 
-    new_phone = payload.new_phone_number
- 
+
+    new_phone = _normalize_phone(payload.new_phone_number)
+
     if customer.phone_number == new_phone:
         raise HTTPException(
             status_code=400,
             detail="New phone number is the same as the current one.",
         )
- 
+
     conflict = (
         db.query(models.Customer)
         .filter(models.Customer.phone_number == new_phone)
@@ -506,11 +526,52 @@ def update_phone_number(
             status_code=400,
             detail="That phone number is already in use by another account.",
         )
- 
+
     customer.phone_number = new_phone
     db.commit()
     db.refresh(customer)
     return customer
+
+
+# OLD CUSTOMER — update profile without changing rewards/history
+
+@app.patch("/customers/{phone_number}/profile", response_model=schemas.CustomerResponse)
+def update_customer_profile(
+    phone_number: str,
+    payload: schemas.UpdateCustomerProfileRequest,
+    db: Session = Depends(get_db),
+):
+    customer = (
+        db.query(models.Customer)
+        .filter(models.Customer.phone_number == _normalize_phone(phone_number))
+        .first()
+    )
+
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found.")
+
+    new_phone = _normalize_phone(payload.phone_number)
+
+    if new_phone != customer.phone_number:
+        conflict = (
+            db.query(models.Customer)
+            .filter(models.Customer.phone_number == new_phone)
+            .first()
+        )
+        if conflict:
+            raise HTTPException(
+                status_code=400,
+                detail="That phone number is already in use by another account.",
+            )
+
+    customer.full_name = payload.full_name.strip()
+    customer.phone_number = new_phone
+    customer.email = (payload.email or "").strip() or None
+
+    db.commit()
+    db.refresh(customer)
+    return customer
+
 
 # VISITS
 

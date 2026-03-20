@@ -16,17 +16,40 @@ const birthdayModalText = document.getElementById("birthday-modal-text");
 const closeBirthdayModalBtn = document.getElementById("close-birthday-modal");
 const backHomeBtn = document.getElementById("back-home-btn");
 
+const successModal = document.getElementById("success-modal");
+const successModalText = document.getElementById("success-modal-text");
+const closeSuccessModalBtn = document.getElementById("close-success-modal");
+
 const carouselImage = document.getElementById("carousel-image");
 const adBadge = document.getElementById("ad-badge");
 const adTitle = document.getElementById("ad-title");
 const adText = document.getElementById("ad-text");
 const phoneInput = document.getElementById("phone_number");
 
+const existingCustomerProfile = document.getElementById("existing-customer-profile");
+
+const newCustomerReviewScreen = document.getElementById("new-customer-review-screen");
+const reviewFullName = document.getElementById("review-full-name");
+const reviewDob = document.getElementById("review-dob");
+const reviewEmail = document.getElementById("review-email");
+const reviewReferralCode = document.getElementById("review-referral-code");
+const editNewCustomerBtn = document.getElementById("edit-new-customer-btn");
+const confirmNewCustomerBtn = document.getElementById("confirm-new-customer-btn");
+
+const updateProfileScreen = document.getElementById("update-profile-screen");
+const updateProfileForm = document.getElementById("update-profile-form");
+const updateProfileBtn = document.getElementById("update-profile-btn");
+const cancelUpdateProfileBtn = document.getElementById("cancel-update-profile-btn");
+const updateFullNameInput = document.getElementById("update_full_name");
+const updatePhoneInput = document.getElementById("update_phone");
+const updateEmailInput = document.getElementById("update_email");
+
 const API_BASE = "http://127.0.0.1:8000";
 const CREATE_CUSTOMER_URL = `${API_BASE}/customers/new`;
 
 let phoneNumber = "";
 let existingCustomer = null;
+let pendingNewCustomerPayload = null;
 
 const carouselSlides = [
   {
@@ -63,11 +86,25 @@ function formatPhone(value) {
   const digits = value.replace(/\D/g, "").slice(0, 10);
   if (digits.length < 4) return digits;
   if (digits.length < 7) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
-  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)} ${digits.slice(6)}`;
 }
 
 function rawDigits(value) {
   return value.replace(/\D/g, "");
+}
+
+function safeText(value) {
+  return value && String(value).trim() ? value : "Not provided";
+}
+
+function formatDateForDisplay(dateValue) {
+  if (!dateValue) return "Not provided";
+  const date = new Date(`${dateValue}T00:00:00`);
+  return date.toLocaleDateString([], {
+    year: "numeric",
+    month: "long",
+    day: "numeric"
+  });
 }
 
 // ── Discount message builder ──────────────────────────────────
@@ -108,11 +145,28 @@ function hideBirthdayModal() {
   birthdayModal.classList.add("hidden");
 }
 
-function showThankYouScreen(text) {
+function showSuccessModal(text) {
+  if (!successModal || !successModalText) return;
+  successModalText.textContent = text;
+  successModal.classList.remove("hidden");
+}
+
+function hideSuccessModal() {
+  if (!successModal) return;
+  successModal.classList.add("hidden");
+}
+
+function hideAllMainScreens() {
   phoneScreen.style.display = "none";
   formScreen.style.display = "none";
+  newCustomerReviewScreen.style.display = "none";
   existingScreen.style.display = "none";
-  if (updatePhoneScreen) updatePhoneScreen.style.display = "none";
+  updateProfileScreen.style.display = "none";
+  thankYouScreen.style.display = "none";
+}
+
+function showThankYouScreen(text) {
+  hideAllMainScreens();
   thankYouScreen.style.display = "block";
   thankYouMessage.textContent = text;
 }
@@ -120,6 +174,46 @@ function showThankYouScreen(text) {
 function formatCheckInTime(dateString) {
   const date = new Date(dateString);
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function renderExistingCustomerProfile(customer) {
+  if (!existingCustomerProfile || !customer) return;
+
+  existingCustomerProfile.innerHTML = `
+    <div class="profile-row">
+      <span class="profile-label">Name</span>
+      <span class="profile-value">${safeText(customer.full_name)}</span>
+    </div>
+    <div class="profile-row">
+      <span class="profile-label">Phone</span>
+      <span class="profile-value">${safeText(customer.phone_number_formatted || formatPhone(customer.phone_number || ""))}</span>
+    </div>
+    <div class="profile-row">
+      <span class="profile-label">Email</span>
+      <span class="profile-value">${safeText(customer.email)}</span>
+    </div>
+    <div class="profile-row">
+      <span class="profile-label">Birthday</span>
+      <span class="profile-value">${formatDateForDisplay(customer.date_of_birth)}</span>
+    </div>
+  `;
+}
+
+function openExistingCustomerScreen() {
+  if (!existingCustomer) return;
+  existingCustomerName.textContent = `Welcome back, ${existingCustomer.full_name}`;
+  renderExistingCustomerProfile(existingCustomer);
+  hideAllMainScreens();
+  existingScreen.style.display = "block";
+  messageBox.textContent = "";
+  messageBox.className = "message";
+}
+
+function populateUpdateProfileForm(customer) {
+  if (!customer) return;
+  updateFullNameInput.value = customer.full_name || "";
+  updatePhoneInput.value = formatPhone(customer.phone_number || "");
+  updateEmailInput.value = customer.email || "";
 }
 
 // ── Today's check-in list ─────────────────────────────────────
@@ -155,12 +249,11 @@ function resetToMainScreen() {
   customerForm.reset();
   existingCustomerForm.reset();
   phoneForm.reset();
+  updateProfileForm.reset();
+
   phoneInput.value = "";
 
-  formScreen.style.display = "none";
-  existingScreen.style.display = "none";
-  thankYouScreen.style.display = "none";
-  if (updatePhoneScreen) updatePhoneScreen.style.display = "none";
+  hideAllMainScreens();
   phoneScreen.style.display = "block";
 
   messageBox.textContent = "";
@@ -168,17 +261,30 @@ function resetToMainScreen() {
 
   phoneNumber = "";
   existingCustomer = null;
+  pendingNewCustomerPayload = null;
 }
 
 closeBirthdayModalBtn.addEventListener("click", hideBirthdayModal);
 backHomeBtn.addEventListener("click", resetToMainScreen);
 
-// ── Phone input — format as (***) ***-**** ────────────────────
+if (closeSuccessModalBtn) {
+  closeSuccessModalBtn.addEventListener("click", hideSuccessModal);
+}
+
+// ── Phone input — format as (***) *** **** ────────────────────
 
 phoneInput.addEventListener("input", () => {
   const digits = rawDigits(phoneInput.value);
   phoneInput.value = formatPhone(digits);
 });
+
+// ── Update profile phone input formatting ─────────────────────
+
+if (updatePhoneInput) {
+  updatePhoneInput.addEventListener("input", () => {
+    updatePhoneInput.value = formatPhone(rawDigits(updatePhoneInput.value));
+  });
+}
 
 // ── Phone form — look up customer ────────────────────────────
 
@@ -209,33 +315,27 @@ phoneForm.addEventListener("submit", async (event) => {
       );
       const statusData = await statusResponse.json();
 
-      if (!statusResponse.ok) throw new Error(statusData.detail || "Failed to check today's status.");
+      if (!statusResponse.ok) {
+        throw new Error(statusData.detail || "Failed to check today's status.");
+      }
 
       if (statusData.already_checked_in_today) {
         messageBox.textContent = `${statusData.full_name} has already checked in today.`;
         messageBox.className = "message error";
+        hideAllMainScreens();
         phoneScreen.style.display = "block";
-        formScreen.style.display = "none";
-        existingScreen.style.display = "none";
-        thankYouScreen.style.display = "none";
         return;
       }
 
-      existingCustomerName.textContent = `Welcome back, ${existingCustomer.full_name}`;
-      messageBox.textContent = "";
-      phoneScreen.style.display = "none";
-      formScreen.style.display = "none";
-      existingScreen.style.display = "block";
-      thankYouScreen.style.display = "none";
+      openExistingCustomerScreen();
       return;
     }
 
     if (response.status === 404) {
       existingCustomer = null;
+      pendingNewCustomerPayload = null;
       messageBox.textContent = "";
-      phoneScreen.style.display = "none";
-      existingScreen.style.display = "none";
-      thankYouScreen.style.display = "none";
+      hideAllMainScreens();
       formScreen.style.display = "block";
       return;
     }
@@ -248,79 +348,138 @@ phoneForm.addEventListener("submit", async (event) => {
   }
 });
 
-// ── New customer form ─────────────────────────────────────────
+// ── New customer review flow ──────────────────────────────────
 
-customerForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-
+function buildNewCustomerPayload() {
   const formData = new FormData(customerForm);
   const referralCode = formData.get("referral_code")?.trim().toUpperCase() || "";
 
-  const payload = {
+  return {
     phone_number: phoneNumber,
     full_name: formData.get("full_name")?.trim(),
     email: formData.get("email")?.trim() || null,
     date_of_birth: formData.get("date_of_birth"),
     referral_code: referralCode || null,
   };
+}
 
-  messageBox.textContent = "Saving customer...";
+function showNewCustomerReview(payload) {
+  pendingNewCustomerPayload = payload;
+
+  reviewFullName.textContent = safeText(payload.full_name);
+  reviewDob.textContent = formatDateForDisplay(payload.date_of_birth);
+  reviewEmail.textContent = safeText(payload.email);
+  reviewReferralCode.textContent = safeText(payload.referral_code);
+
+  hideAllMainScreens();
+  newCustomerReviewScreen.style.display = "block";
+
+  messageBox.textContent = "";
   messageBox.className = "message";
+}
 
-  try {
-    const createResponse = await fetch(CREATE_CUSTOMER_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+customerForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
 
-    const createData = await createResponse.json();
-    if (!createResponse.ok) throw new Error(createData.detail || "Failed to create customer.");
+  const payload = buildNewCustomerPayload();
 
-    let message = "";
+  showNewCustomerReview(payload);
+});
 
-    if (referralCode) {
-      const applyResponse = await fetch(`${API_BASE}/referrals/apply`, {
+if (editNewCustomerBtn) {
+  editNewCustomerBtn.addEventListener("click", () => {
+    hideAllMainScreens();
+    formScreen.style.display = "block";
+    messageBox.textContent = "";
+    messageBox.className = "message";
+  });
+}
+
+if (confirmNewCustomerBtn) {
+  confirmNewCustomerBtn.addEventListener("click", async () => {
+    if (!pendingNewCustomerPayload) return;
+
+    messageBox.textContent = "Saving customer...";
+    messageBox.className = "message";
+
+    try {
+      const createResponse = await fetch(CREATE_CUSTOMER_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone_number: phoneNumber, referral_code: referralCode }),
+        body: JSON.stringify(pendingNewCustomerPayload),
       });
-      const applyData = await applyResponse.json();
-      if (!applyResponse.ok) throw new Error(applyData.detail || "Failed to apply referral code.");
-      message += `${applyData.message} `;
+
+      const createData = await createResponse.json();
+      if (!createResponse.ok) throw new Error(createData.detail || "Failed to create customer.");
+
+      let referralAppliedMessage = "";
+      const referralCode = pendingNewCustomerPayload.referral_code || "";
+
+      if (referralCode) {
+        const applyResponse = await fetch(`${API_BASE}/referrals/apply`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone_number: phoneNumber, referral_code: referralCode }),
+        });
+        const applyData = await applyResponse.json();
+        if (!applyResponse.ok) throw new Error(applyData.detail || "Failed to apply referral code.");
+
+        referralAppliedMessage = `You’ve received ${applyData.discount_percent}% off today as a referral reward from ${applyData.referral_from_customer_name}.`;
+      }
+
+      const checkInResponse = await fetch(
+        `${API_BASE}/customers/check-in/${encodeURIComponent(phoneNumber)}`,
+        { method: "POST" }
+      );
+      const checkInData = await checkInResponse.json();
+      if (!checkInResponse.ok) throw new Error(checkInData.detail || "Failed to check in customer.");
+
+      const birthdayDiscount = checkInData.discounts_applied?.find(d => d.type === "birthday");
+      const referralRewardDiscount = checkInData.discounts_applied?.find(d => d.type === "referral");
+      const earnedReferralCode = !!checkInData.referral_code;
+
+      let successText = "";
+
+      if (birthdayDiscount) {
+        successText = `Happy Birthday, ${checkInData.full_name}! ✨
+Enjoy a complimentary $${birthdayDiscount.amount} birthday reward today.
+Sit back, relax, and let us take care of you.`;
+      } else if (referralAppliedMessage) {
+        successText = `Welcome, ${checkInData.full_name}! ✨
+${referralAppliedMessage}
+Enjoy your visit with us.`;
+      } else if (referralRewardDiscount) {
+        successText = `Congratulations, ${checkInData.full_name}! ✨
+Your ${referralRewardDiscount.percent}% referral reward has been unlocked and applied today.
+Thank you for sharing the love with others.`;
+      } else if (earnedReferralCode) {
+        successText = `You’ve unlocked a special reward, ${checkInData.full_name}! ✨
+Your personal referral code is ${checkInData.referral_code}.
+Share it with friends and give them 10% off their visit.`;
+      }
+
+      if (birthdayDiscount) {
+        showBirthdayModal(checkInData.full_name, birthdayDiscount.amount);
+      }
+
+      messageBox.textContent = "";
+      messageBox.className = "message";
+
+      await loadTodayCheckInOrder();
+
+      if (birthdayDiscount || referralAppliedMessage || referralRewardDiscount || earnedReferralCode) {
+        showSuccessModal(successText);
+      }
+
+      pendingNewCustomerPayload = null;
+
+      showThankYouScreen("You are checked in. Please take a seat and relax. A technician will be with you shortly.");
+    } catch (error) {
+      messageBox.textContent = error.message || "Failed to save customer.";
+      messageBox.className = "message error";
     }
-
-    const checkInResponse = await fetch(
-      `${API_BASE}/customers/check-in/${encodeURIComponent(phoneNumber)}`,
-      { method: "POST" }
-    );
-    const checkInData = await checkInResponse.json();
-    if (!checkInResponse.ok) throw new Error(checkInData.detail || "Failed to check in customer.");
-
-    message += message
-      ? `Checked in: ${checkInData.full_name}.`
-      : `Customer saved and checked in: ${checkInData.full_name}.`;
-
-    const discountMsg = buildDiscountMessage(checkInData.discounts_applied);
-    if (discountMsg) message += ` ${discountMsg}`;
-
-    if (checkInData.referral_code) {
-      message += ` Your referral code: ${checkInData.referral_code} (share for 10% off).`;
-    }
-
-    const birthdayDiscount = checkInData.discounts_applied?.find(d => d.type === "birthday");
-    if (birthdayDiscount) showBirthdayModal(checkInData.full_name, birthdayDiscount.amount);
-
-    messageBox.textContent = message;
-    messageBox.className = "message success";
-
-    await loadTodayCheckInOrder();
-    showThankYouScreen("You are checked in. Please take a seat and relax. A technician will be with you shortly.");
-  } catch (error) {
-    messageBox.textContent = error.message || "Failed to save customer.";
-    messageBox.className = "message error";
-  }
-});
+  });
+}
 
 // ── Returning customer form ───────────────────────────────────
 
@@ -331,7 +490,7 @@ existingCustomerForm.addEventListener("submit", async (event) => {
   const referralCode = referralCodeInput.value.trim().toUpperCase();
 
   try {
-    let message = "";
+    let referralAppliedMessage = "";
 
     if (referralCode) {
       const applyResponse = await fetch(`${API_BASE}/referrals/apply`, {
@@ -341,7 +500,8 @@ existingCustomerForm.addEventListener("submit", async (event) => {
       });
       const applyData = await applyResponse.json();
       if (!applyResponse.ok) throw new Error(applyData.detail || "Failed to apply referral code.");
-      message += `${applyData.message} `;
+
+      referralAppliedMessage = `You’ve received ${applyData.discount_percent}% off today as a referral reward from ${applyData.referral_from_customer_name}.`;
     }
 
     const checkInResponse = await fetch(
@@ -351,22 +511,43 @@ existingCustomerForm.addEventListener("submit", async (event) => {
     const checkInData = await checkInResponse.json();
     if (!checkInResponse.ok) throw new Error(checkInData.detail || "Failed to check in customer.");
 
-    message += `Welcome back, ${checkInData.full_name}!`;
+    const birthdayDiscount = checkInData.discounts_applied?.find(d => d.type === "birthday");
+    const referralRewardDiscount = checkInData.discounts_applied?.find(d => d.type === "referral");
+    const earnedReferralCode = !existingCustomer?.referral_code && !!checkInData.referral_code;
 
-    const discountMsg = buildDiscountMessage(checkInData.discounts_applied);
-    if (discountMsg) message += ` ${discountMsg}`;
+    let successText = "";
 
-    if (checkInData.referral_code) {
-      message += ` Your referral code: ${checkInData.referral_code} (share for 10% off).`;
+    if (birthdayDiscount) {
+      successText = `Happy Birthday, ${checkInData.full_name}! ✨
+Enjoy a complimentary $${birthdayDiscount.amount} birthday reward today.
+Sit back, relax, and let us take care of you.`;
+    } else if (referralAppliedMessage) {
+      successText = `Welcome back, ${checkInData.full_name}! ✨
+${referralAppliedMessage}
+Enjoy your salon experience.`;
+    } else if (referralRewardDiscount) {
+      successText = `Congratulations, ${checkInData.full_name}! ✨
+Your ${referralRewardDiscount.percent}% referral reward has been unlocked and applied today.
+Thank you for sharing the love with others.`;
+    } else if (earnedReferralCode) {
+      successText = `You’ve unlocked a special reward, ${checkInData.full_name}! ✨
+Your personal referral code is ${checkInData.referral_code}.
+Share it with friends and give them 10% off their visit.`;
     }
 
-    const birthdayDiscount = checkInData.discounts_applied?.find(d => d.type === "birthday");
-    if (birthdayDiscount) showBirthdayModal(checkInData.full_name, birthdayDiscount.amount);
+    if (birthdayDiscount) {
+      showBirthdayModal(checkInData.full_name, birthdayDiscount.amount);
+    }
 
-    messageBox.textContent = message;
-    messageBox.className = "message success";
+    messageBox.textContent = "";
+    messageBox.className = "message";
 
     await loadTodayCheckInOrder();
+
+    if (birthdayDiscount || referralAppliedMessage || referralRewardDiscount || earnedReferralCode) {
+      showSuccessModal(successText);
+    }
+
     showThankYouScreen("Thank you for checking in. Please take a seat and enjoy your salon experience.");
   } catch (error) {
     messageBox.textContent = error.message || "Failed to process returning customer.";
@@ -374,101 +555,80 @@ existingCustomerForm.addEventListener("submit", async (event) => {
   }
 });
 
-// ── Update phone number (old customers) ──────────────────────
+// ── Update profile (returning customers) ──────────────────────
 
-const updatePhoneScreen = document.getElementById("update-phone-screen");
-const updatePhoneForm = document.getElementById("update-phone-form");
-const updatePhoneBtn = document.getElementById("update-phone-btn");
-const cancelUpdatePhoneBtn = document.getElementById("cancel-update-phone-btn");
-const currentPhoneInput = document.getElementById("current_phone");
-const newPhoneInput = document.getElementById("new_phone");
-
-if (updatePhoneBtn) {
-  updatePhoneBtn.addEventListener("click", () => {
-    existingScreen.style.display = "none";
-    updatePhoneScreen.style.display = "block";
-    messageBox.textContent = "";
-    messageBox.className = "message";
-    if (currentPhoneInput) {
-      currentPhoneInput.value = formatPhone(phoneNumber);
-    }
-  });
-}
-
-if (cancelUpdatePhoneBtn) {
-  cancelUpdatePhoneBtn.addEventListener("click", () => {
-    updatePhoneScreen.style.display = "none";
-    existingScreen.style.display = "block";
-    if (updatePhoneForm) updatePhoneForm.reset();
+if (updateProfileBtn) {
+  updateProfileBtn.addEventListener("click", () => {
+    populateUpdateProfileForm(existingCustomer);
+    hideAllMainScreens();
+    updateProfileScreen.style.display = "block";
     messageBox.textContent = "";
     messageBox.className = "message";
   });
 }
 
-// Format current_phone and new_phone inputs as (***) ***-****
-[currentPhoneInput, newPhoneInput].forEach(input => {
-  if (!input) return;
-  input.addEventListener("input", () => {
-    input.value = formatPhone(rawDigits(input.value));
+if (cancelUpdateProfileBtn) {
+  cancelUpdateProfileBtn.addEventListener("click", () => {
+    updateProfileForm.reset();
+    openExistingCustomerScreen();
   });
-});
+}
 
-if (updatePhoneForm) {
-  updatePhoneForm.addEventListener("submit", async (event) => {
+if (updateProfileForm) {
+  updateProfileForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
-    const currentPhone = rawDigits(currentPhoneInput.value);
-    const newPhone = rawDigits(newPhoneInput.value);
+    const updatedFullName = updateFullNameInput.value.trim();
+    const updatedPhone = rawDigits(updatePhoneInput.value);
+    const updatedEmail = updateEmailInput.value.trim();
 
-    if (currentPhone.length !== 10) {
-      messageBox.textContent = "Current phone number must be exactly 10 digits.";
-      messageBox.className = "message error";
-      return;
-    }
-    if (newPhone.length !== 10) {
-      messageBox.textContent = "New phone number must be exactly 10 digits.";
-      messageBox.className = "message error";
-      return;
-    }
-    if (currentPhone === newPhone) {
-      messageBox.textContent = "New phone number must be different from the current one.";
+    if (!updatedFullName) {
+      messageBox.textContent = "Name is required.";
       messageBox.className = "message error";
       return;
     }
 
-    messageBox.textContent = "Updating phone number...";
+    if (updatedPhone.length !== 10) {
+      messageBox.textContent = "Phone number must be exactly 10 digits.";
+      messageBox.className = "message error";
+      return;
+    }
+
+    messageBox.textContent = "Updating profile...";
     messageBox.className = "message";
 
     try {
       const response = await fetch(
-        `${API_BASE}/customers/${currentPhone}/update-phone`,
+        `${API_BASE}/customers/${encodeURIComponent(phoneNumber)}/profile`,
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ new_phone_number: newPhone }),
+          body: JSON.stringify({
+            full_name: updatedFullName,
+            phone_number: updatedPhone,
+            email: updatedEmail || null,
+          }),
         }
       );
 
       const data = await response.json();
 
       if (!response.ok) {
-        messageBox.textContent = data.detail || "Failed to update phone number.";
-        messageBox.className = "message error";
-        return;
+        throw new Error(data.detail || "Failed to update profile.");
       }
 
-      // Update the stored phone number so further actions use the new one
-      phoneNumber = newPhone;
+      existingCustomer = data;
+      phoneNumber = data.phone_number;
 
-      messageBox.textContent = `Phone number updated successfully, ${data.full_name}! All your rewards are kept.`;
-      messageBox.className = "message success";
+      messageBox.textContent = "";
+      messageBox.className = "message";
 
-      updatePhoneScreen.style.display = "none";
-      updatePhoneForm.reset();
+      showSuccessModal(`Profile updated successfully, ${data.full_name}. Your rewards, referral code, birthday benefits, and visit history all stay on the same account.`);
 
-      showThankYouScreen("Your phone number has been updated. All rewards, visit history, and discounts are preserved.");
+      updateProfileForm.reset();
+      openExistingCustomerScreen();
     } catch (error) {
-      messageBox.textContent = error.message || "Failed to update phone number.";
+      messageBox.textContent = error.message || "Failed to update profile.";
       messageBox.className = "message error";
     }
   });

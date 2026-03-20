@@ -91,3 +91,10 @@ If your backend is running locally, the form will submit to the API.
 - birthday discount logic
 - staff dashboard
 - authentication for employees
+
+
+NOTE:
+
+- Check in system's design should be updated
+- The application currently relies on email for sending reminders; however, in the future, this should be updated to use phone numbers instead, as email is optional.
+- Making checkout system (apply discount to bill) included in the main system.

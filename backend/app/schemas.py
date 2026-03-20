@@ -3,14 +3,17 @@ from pydantic import BaseModel, computed_field, field_validator
 from datetime import date, datetime
 import re
 
+
 def format_phone_display(digits: str) -> str:
     return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+
 
 def validate_phone(v: str) -> str:
     digits_only = re.sub(r"\D", "", v)
     if len(digits_only) != 10:
         raise ValueError("Phone number must be exactly 10 digits.")
     return digits_only
+
 
 class CustomerCreate(BaseModel):
     full_name: str
@@ -32,9 +35,9 @@ class CustomerResponse(BaseModel):
     email: Optional[str] = None
     date_of_birth: date
     referral_code: Optional[str] = None
-    referral_count: int = 0 
+    referral_count: int = 0
     referral_discount_percent: int
-    referral_discount_pending: bool = False  
+    referral_discount_pending: bool = False
     visit_discount_pending: bool = False
     birthday_discount_amount: int
     birthday_discount_used_month: Optional[str] = None
@@ -46,8 +49,9 @@ class CustomerResponse(BaseModel):
     @property
     def phone_number_formatted(self) -> str:
         return format_phone_display(self.phone_number)
-    
+
     model_config = {"from_attributes": True}
+
 
 class CheckInResponse(BaseModel):
     message: str
@@ -100,12 +104,24 @@ class TodayCheckInItem(BaseModel):
 
 
 class TodayCheckInResponse(BaseModel):
-    checkins: list[TodayCheckInItem]    
+    checkins: list[TodayCheckInItem]
+
 
 class UpdatePhoneRequest(BaseModel):
     new_phone_number: str
 
     @field_validator("new_phone_number")
+    @classmethod
+    def check_phone(cls, v: str) -> str:
+        return validate_phone(v)
+
+
+class UpdateCustomerProfileRequest(BaseModel):
+    full_name: str
+    phone_number: str
+    email: Optional[str] = None
+
+    @field_validator("phone_number")
     @classmethod
     def check_phone(cls, v: str) -> str:
         return validate_phone(v)

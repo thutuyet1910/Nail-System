@@ -4,6 +4,7 @@ from sqlalchemy.orm import relationship
 from .database import Base
 from datetime import datetime
 
+
 class Customer(Base):
     __tablename__ = "customers"
 
@@ -19,14 +20,13 @@ class Customer(Base):
     referral_discount_pending = Column(Boolean, default=False, nullable=False)
 
     birthday_discount_amount = Column(Integer, default=10)
-    birthday_discount_used_month = Column(String, nullable=True) 
+    birthday_discount_used_month = Column(String, nullable=True)
 
     visit_count_cycle = Column(Integer, default=0)
+    visit_discount_pending = Column(Boolean, default=False, nullable=False)
 
     used_referral_code = Column(String, nullable=True)
     used_referral_from_customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True)
-
-    visit_discount_pending = Column(Boolean, default=False, nullable=False)
 
     birthday_reminder_sent = Column(Boolean, default=False)
     birthday_reminder_sent_date = Column(Date, nullable=True)
@@ -45,6 +45,7 @@ class Customer(Base):
         cascade="all, delete-orphan",
     )
 
+
 class Visit(Base):
     __tablename__ = "visits"
 
@@ -55,7 +56,6 @@ class Visit(Base):
 
     customer = relationship("Customer", back_populates="visits")
 
-    
 
 class ReferralUsage(Base):
     __tablename__ = "referral_usages"

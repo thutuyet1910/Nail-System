@@ -295,6 +295,60 @@ button:hover {
   margin-bottom: 20px;
 }
 
+.success-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(46, 18, 31, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  padding: 20px;
+}
+
+.success-modal.hidden {
+  display: none;
+}
+
+.success-modal-card {
+  width: 100%;
+  max-width: 460px;
+  text-align: center;
+  background:
+    linear-gradient(180deg, rgba(255, 248, 251, 0.98), rgba(255, 234, 242, 0.96));
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 30px;
+  padding: 36px 28px;
+  box-shadow:
+    0 30px 70px rgba(89, 45, 63, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  animation: luxuryPop 0.38s ease;
+  backdrop-filter: blur(10px);
+}
+
+.success-icon {
+  font-size: 34px;
+  margin-bottom: 14px;
+}
+
+.success-modal-card h2 {
+  color: #b34f78;
+  margin-bottom: 12px;
+  font-size: 33px;
+  line-height: 1.15;
+}
+
+.success-modal-card p {
+  color: #6f4d5b;
+  font-size: 18px;
+  line-height: 1.7;
+  margin-bottom: 22px;
+}
+
+#close-success-modal {
+  min-width: 160px;
+}
+
 .queue-card {
   margin-bottom: 18px;
 }
@@ -348,6 +402,143 @@ button:hover {
   font-size: 15px;
 }
 
+/* ── Existing customer profile ──────────────────────────────── */
+
+.profile-card {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(236, 217, 225, 0.9);
+  border-radius: 18px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.profile-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-start;
+}
+
+.profile-label {
+  color: #8a6d79;
+  font-size: 14px;
+  font-weight: 700;
+  min-width: 78px;
+}
+
+.profile-value {
+  color: #5f3a4a;
+  font-size: 15px;
+  font-weight: 600;
+  text-align: right;
+  word-break: break-word;
+}
+
+/* ── Reminder / review box ──────────────────────────────────── */
+
+.reminder-box {
+  background: rgba(255, 248, 220, 0.88);
+  border: 1px solid #f1de9a;
+  color: #7a5b16;
+  border-radius: 16px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.review-card {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(236, 217, 225, 0.9);
+  border-radius: 18px;
+  padding: 16px 18px;
+  margin-bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.review-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.review-actions button {
+  flex: 1;
+}
+
+/* ── Secondary button & update profile ─────────────────────── */
+
+.secondary-btn {
+  background: transparent;
+  color: #8a4f66;
+  border: 2px solid #d9a8bc;
+  box-shadow: none;
+  margin-top: 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.secondary-btn:hover {
+  background: rgba(212, 132, 163, 0.08);
+  box-shadow: none;
+  transform: none;
+}
+
+.update-profile-card {
+  text-align: center;
+}
+
+.update-profile-card h2 {
+  margin-bottom: 10px;
+}
+
+.update-profile-subtitle {
+  max-width: 360px;
+  margin: 0 auto 24px;
+  text-align: center;
+}
+
+.update-profile-form {
+  max-width: 460px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.update-profile-form input {
+  text-align: center;
+}
+
+#update_full_name,
+#update_phone,
+#update_email {
+  font-size: 22px;
+  font-weight: 500;
+}
+
+#update_phone {
+  letter-spacing: 1px;
+}
+
+.update-profile-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 8px;
+}
+
+.update-profile-actions .secondary-btn {
+  margin-top: 0;
+  width: 100%;
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;
@@ -367,6 +558,17 @@ button:hover {
   to {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+@keyframes luxuryPop {
+  from {
+    opacity: 0;
+    transform: scale(0.92) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
   }
 }
 
@@ -451,46 +653,27 @@ button:hover {
   #phone_number {
     font-size: 22px;
   }
-}
-/* ── Update phone & secondary button ── */
 
-.secondary-btn {
-  background: transparent;
-  color: #8a4f66;
-  border: 2px solid #d9a8bc;
-  box-shadow: none;
-  margin-top: 10px;
-  font-size: 15px;
-  font-weight: 600;
-}
+  .profile-row {
+    flex-direction: column;
+    gap: 6px;
+  }
 
-.secondary-btn:hover {
-  background: rgba(212, 132, 163, 0.08);
-  box-shadow: none;
-  transform: none;
-}
+  .profile-value {
+    text-align: left;
+  }
 
-.rewards-kept {
-  background: rgba(240, 255, 245, 0.85);
-  border: 1px solid #c6ebd0;
-  border-radius: 14px;
-  padding: 14px 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
+  .review-actions {
+    flex-direction: column;
+  }
 
-.rewards-kept p {
-  color: #20673a;
-  font-size: 14px;
-  font-weight: 600;
-  margin: 0;
-}
+  .update-profile-form {
+    max-width: 100%;
+  }
 
-#current_phone,
-#new_phone {
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: 1px;
-  text-align: center;
+  #update_full_name,
+  #update_phone,
+  #update_email {
+    font-size: 18px;
+  }
 }

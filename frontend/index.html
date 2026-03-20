@@ -47,7 +47,7 @@
             type="text"
             id="phone_number"
             name="phone_number"
-            placeholder="(555) 000-0000"
+            placeholder="(555) 000 0000"
             inputmode="numeric"
             autocomplete="off"
             maxlength="14"
@@ -66,14 +66,51 @@
           <input type="date" name="date_of_birth" required />
           <input type="email" name="email" placeholder="Email (optional)" />
           <input type="text" name="referral_code" placeholder="Referral Code (optional)" />
-          <button type="submit">Check In</button>
+          <button type="submit">Review Information</button>
         </form>
+      </div>
+
+      <!-- New customer review -->
+      <div id="new-customer-review-screen" class="card" style="display: none;">
+        <h2>Review Your Information</h2>
+        <p class="subtitle">Please check your information before continuing.</p>
+
+        <div class="reminder-box">
+          Please check your information before continuing.
+        </div>
+
+        <div class="review-card">
+          <div class="profile-row">
+            <span class="profile-label">Name</span>
+            <span class="profile-value" id="review-full-name"></span>
+          </div>
+          <div class="profile-row">
+            <span class="profile-label">Birthday</span>
+            <span class="profile-value" id="review-dob"></span>
+          </div>
+          <div class="profile-row">
+            <span class="profile-label">Email</span>
+            <span class="profile-value" id="review-email"></span>
+          </div>
+          <div class="profile-row">
+            <span class="profile-label">Referral</span>
+            <span class="profile-value" id="review-referral-code"></span>
+          </div>
+        </div>
+
+        <div class="review-actions">
+          <button type="button" id="edit-new-customer-btn" class="secondary-btn">Edit</button>
+          <button type="button" id="confirm-new-customer-btn">Continue</button>
+        </div>
       </div>
 
       <!-- Returning customer -->
       <div id="existing-screen" class="card" style="display: none;">
         <h2>Returning Customer</h2>
         <p id="existing-customer-name" class="subtitle"></p>
+
+        <div id="existing-customer-profile" class="profile-card"></div>
+
         <form id="existing-customer-form">
           <input
             type="text"
@@ -83,45 +120,52 @@
           />
           <button type="submit">Check In</button>
         </form>
-        <button type="button" id="update-phone-btn" class="secondary-btn">
-          Update Phone Number
+
+        <button type="button" id="update-profile-btn" class="secondary-btn">
+          Update Profile
         </button>
       </div>
 
-      <!-- Update phone number -->
-      <div id="update-phone-screen" class="card" style="display: none;">
-        <h2>Update Phone Number</h2>
-        <p class="subtitle">Your rewards, visit history, and discounts are all kept.</p>
-        <form id="update-phone-form">
-          <input
-            type="text"
-            id="current_phone"
-            name="current_phone"
-            placeholder="Current phone: (555) 000-0000"
-            inputmode="numeric"
-            maxlength="14"
-            required
-          />
-          <input
-            type="text"
-            id="new_phone"
-            name="new_phone"
-            placeholder="New phone: (555) 000-0001"
-            inputmode="numeric"
-            maxlength="14"
-            required
-          />
-          <div class="rewards-kept">
-            <p>✓ Birthday discount kept</p>
-            <p>✓ Referral rewards kept</p>
-            <p>✓ Loyalty visits kept</p>
-          </div>
-          <button type="submit">Update Phone Number</button>
-        </form>
-        <button type="button" id="cancel-update-phone-btn" class="secondary-btn">
-          Cancel
-        </button>
-      </div>
+      
+      <!-- Update profile -->
+<div id="update-profile-screen" class="card update-profile-card" style="display: none;">
+  <h2>Update Profile</h2>
+  <p class="subtitle update-profile-subtitle">
+    Edit your information below.
+  </p>
+
+  <form id="update-profile-form" class="update-profile-form">
+    <input
+      type="text"
+      id="update_full_name"
+      name="update_full_name"
+      placeholder="Full Name"
+      required
+    />
+    <input
+      type="text"
+      id="update_phone"
+      name="update_phone"
+      placeholder="Phone Number"
+      inputmode="numeric"
+      maxlength="14"
+      required
+    />
+    <input
+      type="email"
+      id="update_email"
+      name="update_email"
+      placeholder="Email (optional)"
+    />
+
+    <div class="update-profile-actions">
+      <button type="submit">Save</button>
+      <button type="button" id="cancel-update-profile-btn" class="secondary-btn">
+        Cancel
+      </button>
+    </div>
+  </form>
+</div>
 
       <!-- Thank you -->
       <div id="thank-you-screen" class="card thank-you-card" style="display: none;">
@@ -143,6 +187,15 @@
       <h2>Happy Birthday!</h2>
       <p id="birthday-modal-text">You have $10 off today.</p>
       <button type="button" id="close-birthday-modal">Awesome</button>
+    </div>
+  </div>
+
+  <div id="success-modal" class="success-modal hidden">
+    <div class="success-modal-card">
+      <div class="success-icon">✨💅✨</div>
+      <h2>You're Checked In</h2>
+      <p id="success-modal-text">Welcome! Please relax and enjoy your visit.</p>
+      <button type="button" id="close-success-modal">Lovely</button>
     </div>
   </div>
 
