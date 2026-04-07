@@ -44,6 +44,8 @@ const updateFullNameInput = document.getElementById("update_full_name");
 const updatePhoneInput = document.getElementById("update_phone");
 const updateEmailInput = document.getElementById("update_email");
 
+const dobInput = document.getElementById("date_of_birth");
+
 const API_BASE = "http://127.0.0.1:8000";
 const CREATE_CUSTOMER_URL = `${API_BASE}/customers/new`;
 
@@ -80,13 +82,15 @@ const carouselSlides = [
 
 let carouselIndex = 0;
 
-// ── Phone formatting helpers ──────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────
 
 function formatPhone(value) {
   const digits = value.replace(/\D/g, "").slice(0, 10);
-  if (digits.length < 4) return digits;
-  if (digits.length < 7) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
-  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)} ${digits.slice(6)}`;
+
+  if (digits.length === 0) return "";
+  if (digits.length <= 3) return `(${digits}`;
+  if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
 }
 
 function rawDigits(value) {
@@ -97,9 +101,25 @@ function safeText(value) {
   return value && String(value).trim() ? value : "Not provided";
 }
 
+function getTodayISODate() {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function formatDateForDisplay(dateValue) {
   if (!dateValue) return "Not provided";
-  const date = new Date(`${dateValue}T00:00:00`);
+
+  const parts = String(dateValue).split("-");
+  if (parts.length !== 3) return "Not provided";
+
+  const [year, month, day] = parts.map(Number);
+  const date = new Date(year, month - 1, day);
+
+  if (Number.isNaN(date.getTime())) return "Not provided";
+
   return date.toLocaleDateString([], {
     year: "numeric",
     month: "long",
@@ -107,19 +127,79 @@ function formatDateForDisplay(dateValue) {
   });
 }
 
-// ── Discount message builder ──────────────────────────────────
+function isValidDOB(dateString) {
+  if (!dateString || typeof dateString !== "string") return false;
 
-function buildDiscountMessage(discounts) {
-  if (!discounts || discounts.length === 0) return "";
-  return discounts.map(d => d.description).join(" · ");
+  // Must be exactly YYYY-MM-DD
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString)) return false;
+
+  const [yearStr, monthStr, dayStr] = dateString.split("-");
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const day = Number(dayStr);
+
+  // Enforce exactly 4-digit year
+  if (yearStr.length !== 4) return false;
+
+  if (year < 1900 || year > new Date().getFullYear()) return false;
+  if (month < 1 || month > 12) return false;
+  if (day < 1 || day > 31) return false;
+
+  const date = new Date(year, month - 1, day);
+
+  // Reject invalid dates like 2026-02-31
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() + 1 !== month ||
+    date.getDate() !== day
+  ) {
+    return false;
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  date.setHours(0, 0, 0, 0);
+
+  if (date > today) return false;
+
+  return true;
+}
+
+function setDOBLimits() {
+  if (!dobInput) return;
+
+  dobInput.max = getTodayISODate();
+  dobInput.min = "1900-01-01";
+  dobInput.setAttribute("inputmode", "numeric");
+}
+
+function validateDOBInput() {
+  if (!dobInput) return true;
+
+  const value = dobInput.value;
+
+  if (!value) {
+    dobInput.setCustomValidity("Please select your date of birth.");
+    return false;
+  }
+
+  if (!isValidDOB(value)) {
+    dobInput.setCustomValidity("Please enter a valid date of birth with a 4-digit year.");
+    return false;
+  }
+
+  dobInput.setCustomValidity("");
+  return true;
 }
 
 // ── Carousel ──────────────────────────────────────────────────
 
 function renderSlide(index) {
   if (!carouselImage) return;
+
   const slide = carouselSlides[index];
   carouselImage.style.backgroundImage = `url("${slide.image}")`;
+
   if (adBadge) adBadge.textContent = slide.badge;
   if (adTitle) adTitle.textContent = slide.title;
   if (adText) adText.textContent = slide.text;
@@ -127,7 +207,9 @@ function renderSlide(index) {
 
 function startCarousel() {
   if (!carouselImage) return;
+
   renderSlide(carouselIndex);
+
   setInterval(() => {
     carouselIndex = (carouselIndex + 1) % carouselSlides.length;
     renderSlide(carouselIndex);
@@ -137,11 +219,13 @@ function startCarousel() {
 // ── Modals & screens ──────────────────────────────────────────
 
 function showBirthdayModal(fullName, amount) {
+  if (!birthdayModal || !birthdayModalText) return;
   birthdayModalText.textContent = `Happy Birthday ${fullName}! You have $${amount} off today.`;
   birthdayModal.classList.remove("hidden");
 }
 
 function hideBirthdayModal() {
+  if (!birthdayModal) return;
   birthdayModal.classList.add("hidden");
 }
 
@@ -201,10 +285,13 @@ function renderExistingCustomerProfile(customer) {
 
 function openExistingCustomerScreen() {
   if (!existingCustomer) return;
+
   existingCustomerName.textContent = `Welcome back, ${existingCustomer.full_name}`;
   renderExistingCustomerProfile(existingCustomer);
+
   hideAllMainScreens();
   existingScreen.style.display = "block";
+
   messageBox.textContent = "";
   messageBox.className = "message";
 }
@@ -222,11 +309,16 @@ async function loadTodayCheckInOrder() {
   try {
     const response = await fetch(`${API_BASE}/today-checkins`);
     const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "Failed to load today's check-in order.");
+
+    if (!response.ok) {
+      throw new Error(data.detail || "Failed to load today's check-in order.");
+    }
+
     if (!data.checkins || data.checkins.length === 0) {
       checkinOrderList.innerHTML = `<p class="queue-empty">No customers checked in yet.</p>`;
       return;
     }
+
     checkinOrderList.innerHTML = data.checkins
       .map(item => `
         <div class="queue-item">
@@ -243,7 +335,7 @@ async function loadTodayCheckInOrder() {
   }
 }
 
-// ── Reset to main screen ──────────────────────────────────────
+// ── Reset ─────────────────────────────────────────────────────
 
 function resetToMainScreen() {
   customerForm.reset();
@@ -251,7 +343,8 @@ function resetToMainScreen() {
   phoneForm.reset();
   updateProfileForm.reset();
 
-  phoneInput.value = "";
+  if (phoneInput) phoneInput.value = "";
+  if (dobInput) dobInput.value = "";
 
   hideAllMainScreens();
   phoneScreen.style.display = "block";
@@ -264,29 +357,42 @@ function resetToMainScreen() {
   pendingNewCustomerPayload = null;
 }
 
-closeBirthdayModalBtn.addEventListener("click", hideBirthdayModal);
-backHomeBtn.addEventListener("click", resetToMainScreen);
+if (closeBirthdayModalBtn) {
+  closeBirthdayModalBtn.addEventListener("click", hideBirthdayModal);
+}
+
+if (backHomeBtn) {
+  backHomeBtn.addEventListener("click", resetToMainScreen);
+}
 
 if (closeSuccessModalBtn) {
   closeSuccessModalBtn.addEventListener("click", hideSuccessModal);
 }
 
-// ── Phone input — format as (***) *** **** ────────────────────
+// ── Phone input formatting ────────────────────────────────────
 
-phoneInput.addEventListener("input", () => {
-  const digits = rawDigits(phoneInput.value);
-  phoneInput.value = formatPhone(digits);
-});
-
-// ── Update profile phone input formatting ─────────────────────
-
-if (updatePhoneInput) {
-  updatePhoneInput.addEventListener("input", () => {
-    updatePhoneInput.value = formatPhone(rawDigits(updatePhoneInput.value));
+if (phoneInput) {
+  phoneInput.addEventListener("input", (e) => {
+    e.target.value = formatPhone(e.target.value);
   });
 }
 
-// ── Phone form — look up customer ────────────────────────────
+if (updatePhoneInput) {
+  updatePhoneInput.addEventListener("input", () => {
+    updatePhoneInput.value = formatPhone(updatePhoneInput.value);
+  });
+}
+
+// ── DOB input rules ───────────────────────────────────────────
+
+setDOBLimits();
+
+if (dobInput) {
+  dobInput.addEventListener("input", validateDOBInput);
+  dobInput.addEventListener("change", validateDOBInput);
+}
+
+// ── Phone form ────────────────────────────────────────────────
 
 phoneForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -383,6 +489,13 @@ customerForm.addEventListener("submit", async (event) => {
 
   const payload = buildNewCustomerPayload();
 
+  if (!validateDOBInput() || !isValidDOB(payload.date_of_birth)) {
+    messageBox.textContent = "Please enter a valid date of birth with a 4-digit year.";
+    messageBox.className = "message error";
+    if (dobInput) dobInput.reportValidity();
+    return;
+  }
+
   showNewCustomerReview(payload);
 });
 
@@ -410,7 +523,9 @@ if (confirmNewCustomerBtn) {
       });
 
       const createData = await createResponse.json();
-      if (!createResponse.ok) throw new Error(createData.detail || "Failed to create customer.");
+      if (!createResponse.ok) {
+        throw new Error(createData.detail || "Failed to create customer.");
+      }
 
       let referralAppliedMessage = "";
       const referralCode = pendingNewCustomerPayload.referral_code || "";
@@ -421,8 +536,11 @@ if (confirmNewCustomerBtn) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ phone_number: phoneNumber, referral_code: referralCode }),
         });
+
         const applyData = await applyResponse.json();
-        if (!applyResponse.ok) throw new Error(applyData.detail || "Failed to apply referral code.");
+        if (!applyResponse.ok) {
+          throw new Error(applyData.detail || "Failed to apply referral code.");
+        }
 
         referralAppliedMessage = `You’ve received ${applyData.discount_percent}% off today as a referral reward from ${applyData.referral_from_customer_name}.`;
       }
@@ -431,8 +549,11 @@ if (confirmNewCustomerBtn) {
         `${API_BASE}/customers/check-in/${encodeURIComponent(phoneNumber)}`,
         { method: "POST" }
       );
+
       const checkInData = await checkInResponse.json();
-      if (!checkInResponse.ok) throw new Error(checkInData.detail || "Failed to check in customer.");
+      if (!checkInResponse.ok) {
+        throw new Error(checkInData.detail || "Failed to check in customer.");
+      }
 
       const birthdayDiscount = checkInData.discounts_applied?.find(d => d.type === "birthday");
       const referralRewardDiscount = checkInData.discounts_applied?.find(d => d.type === "referral");
@@ -481,7 +602,7 @@ Share it with friends and give them 10% off their visit.`;
   });
 }
 
-// ── Returning customer form ───────────────────────────────────
+// ── Returning customer ────────────────────────────────────────
 
 existingCustomerForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -498,8 +619,11 @@ existingCustomerForm.addEventListener("submit", async (event) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone_number: phoneNumber, referral_code: referralCode }),
       });
+
       const applyData = await applyResponse.json();
-      if (!applyResponse.ok) throw new Error(applyData.detail || "Failed to apply referral code.");
+      if (!applyResponse.ok) {
+        throw new Error(applyData.detail || "Failed to apply referral code.");
+      }
 
       referralAppliedMessage = `You’ve received ${applyData.discount_percent}% off today as a referral reward from ${applyData.referral_from_customer_name}.`;
     }
@@ -508,8 +632,11 @@ existingCustomerForm.addEventListener("submit", async (event) => {
       `${API_BASE}/customers/check-in/${encodeURIComponent(phoneNumber)}`,
       { method: "POST" }
     );
+
     const checkInData = await checkInResponse.json();
-    if (!checkInResponse.ok) throw new Error(checkInData.detail || "Failed to check in customer.");
+    if (!checkInResponse.ok) {
+      throw new Error(checkInData.detail || "Failed to check in customer.");
+    }
 
     const birthdayDiscount = checkInData.discounts_applied?.find(d => d.type === "birthday");
     const referralRewardDiscount = checkInData.discounts_applied?.find(d => d.type === "referral");
@@ -555,7 +682,7 @@ Share it with friends and give them 10% off their visit.`;
   }
 });
 
-// ── Update profile (returning customers) ──────────────────────
+// ── Update profile ────────────────────────────────────────────
 
 if (updateProfileBtn) {
   updateProfileBtn.addEventListener("click", () => {
@@ -623,7 +750,9 @@ if (updateProfileForm) {
       messageBox.textContent = "";
       messageBox.className = "message";
 
-      showSuccessModal(`Profile updated successfully, ${data.full_name}. Your rewards, referral code, birthday benefits, and visit history all stay on the same account.`);
+      showSuccessModal(
+        `Profile updated successfully, ${data.full_name}. Your rewards, referral code, birthday benefits, and visit history all stay on the same account.`
+      );
 
       updateProfileForm.reset();
       openExistingCustomerScreen();
