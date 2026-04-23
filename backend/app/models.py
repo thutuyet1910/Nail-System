@@ -1,8 +1,9 @@
-from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, Boolean
+from datetime import datetime
+
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 
 from .database import Base
-from datetime import datetime
 
 
 class Customer(Base):
@@ -55,6 +56,28 @@ class Visit(Base):
     checked_in_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     customer = relationship("Customer", back_populates="visits")
+    visit_services = relationship("VisitService", back_populates="visit", cascade="all, delete-orphan")
+
+
+class Service(Base):
+    __tablename__ = "services"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    visit_services = relationship("VisitService", back_populates="service", cascade="all, delete-orphan")
+
+
+class VisitService(Base):
+    __tablename__ = "visit_services"
+
+    id = Column(Integer, primary_key=True, index=True)
+    visit_id = Column(Integer, ForeignKey("visits.id"), nullable=False)
+    service_id = Column(Integer, ForeignKey("services.id"), nullable=False)
+
+    visit = relationship("Visit", back_populates="visit_services")
+    service = relationship("Service", back_populates="visit_services")
 
 
 class ReferralUsage(Base):

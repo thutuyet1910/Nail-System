@@ -1,25 +1,95 @@
-# Nail System Starter
+# Nail Check-In System
 
-This is a starter project for the **Nail System** app focused on the **New Customer Check-In** flow.
+A modern nail salon **customer check-in system** designed to support both **new** and **returning** customer flows, service selection, referral rewards, birthday rewards, and live same-day queue tracking.
 
-## What this version does
-- Lets a front desk user enter a new customer's:
+This project is part of a larger salon management system and is intended to connect later with:
+- technician assignment
+- appointments
+- checkout
+- discounts
+- revenue reporting
+
+---
+
+## Overview
+
+The Nail Check-In System helps a salon manage the front-desk check-in experience by allowing customers to:
+- check in using their phone number
+- create a new customer profile if they are new
+- continue as a returning customer if already in the system
+- select services before final confirmation
+- receive birthday and referral rewards when eligible
+- join the live check-in queue for the day
+
+---
+
+## Current Features
+
+### Customer Identification
+- Phone-first check-in flow
+- Detects whether the customer is:
+  - **new**
+  - **returning**
+- Prevents duplicate same-day check-ins
+
+### New Customer Flow
+- Collects:
   - phone number
   - full name
   - email (optional)
   - date of birth
   - referral code (optional)
-- Saves the customer to a SQLite database
-- Prevents duplicate phone numbers
-- Shows a simple success/error message in the frontend
+- Lets customer select one or more services
+- Shows a review screen before final confirmation
+- Saves the new customer into the database
+- Checks the customer into today’s queue
 
-## Tech stack
-- **Backend:** FastAPI + SQLAlchemy + SQLite
-- **Frontend:** HTML + CSS + JavaScript
+### Returning Customer Flow
+- Looks up customer by phone number
+- Displays customer profile
+- Allows profile updates
+- Lets returning customer select services
+- Shows a review screen before final confirmation
+- Checks the customer into today’s queue
 
-## Project structure
+### Rewards & Promotions
+- Birthday reward support
+- Referral code support
+- Referral discount application
+- Success modal and birthday modal for reward messages
+- Referral code unlock flow
 
-```
+### Services
+- Loads services from backend
+- Searchable service list
+- Multi-service selection
+- Review selected services before final check-in
+
+### Live Queue
+- Displays today’s check-in order
+- Shows queue position
+- Shows check-in time
+- Auto-refreshes the queue
+
+---
+
+## Tech Stack
+
+### Backend
+- FastAPI
+- SQLAlchemy
+- SQLite
+
+### Frontend
+- HTML
+- CSS
+- JavaScript
+
+---
+
+## Project Structure
+
+```text
 nail-system/
 ├── backend/
 │   ├── app/
@@ -35,67 +105,28 @@ nail-system/
 │   └── script.js
 ├── .gitignore
 └── README.md
-```
 
-## How to run
-
-### 1. Open the project in VS Code
-Open the `nail-system` folder.
-
-### 2. Backend setup
-In a terminal:
-
-```bash
-cd backend
-python -m venv venv
-```
-
-Activate the virtual environment:
-
-**Windows PowerShell**
-```bash
-venv\Scripts\Activate.ps1
-```
-
-**Windows CMD**
-```bash
-venv\Scripts\activate
-```
-
-Install packages:
-
-```bash
-pip install -r requirements.txt
-```
-
-Run the backend:
-
-```bash
-uvicorn app.main:app --reload
-```
-
+## How to Run
+1. Open the project
+2. Backend setup
+    Open a terminal and run:
+        cd backend
+        python -m venv venv
+    Activate the virtual environment:
+        venv\Scripts\Activate.ps1
+        venv\Scripts\activate
+    Install dependencies:
+        pip install -r requirements.txt
+    Run the backend:
+        uvicorn app.main:app --reload
 Backend will run at:
-- API: `http://127.0.0.1:8000`
-- Docs: `http://127.0.0.1:8000/docs`
+      API: http://127.0.0.1:8000
+      Docs: http://127.0.0.1:8000/docs
+3. Frontend setup
+    Open frontend/index.html directly in the browser, or use the VS Code Live Server extension.
 
-### 3. Frontend setup
-Open `frontend/index.html` directly in the browser, or use the VS Code Live Server extension.
-
-If your backend is running locally, the form will submit to the API.
-
-## Next steps you can build later
-- old customer lookup by phone number
-- update phone number flow
-- visit count tracking
-- referral code generation after 5 visits
-- birthday discount logic
-- staff dashboard
-- authentication for employees
-
-
-NOTE:
-
-- Check in system's design should be updated
-- The application currently relies on email for sending reminders; however, in the future, this should be updated to use phone numbers instead, as email is optional.
-- Making checkout system (apply discount to bill) included in the main system.
-_ Make it multi languages
+## Future Improvements
+    - Update the overall design of the check-in system
+    - In the future, reminder logic should be updated to use phone numbers instead, since email is optional
+    
+   

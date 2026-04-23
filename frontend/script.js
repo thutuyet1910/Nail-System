@@ -28,13 +28,35 @@ const phoneInput = document.getElementById("phone_number");
 
 const existingCustomerProfile = document.getElementById("existing-customer-profile");
 
+const newCustomerServiceScreen = document.getElementById("new-customer-service-screen");
+const newServiceSearchInput = document.getElementById("new-service-search");
+const newServiceList = document.getElementById("new-service-list");
+const backToNewCustomerFormBtn = document.getElementById("back-to-new-customer-form-btn");
+const continueToNewReviewBtn = document.getElementById("continue-to-new-review-btn");
+
 const newCustomerReviewScreen = document.getElementById("new-customer-review-screen");
 const reviewFullName = document.getElementById("review-full-name");
 const reviewDob = document.getElementById("review-dob");
 const reviewEmail = document.getElementById("review-email");
 const reviewReferralCode = document.getElementById("review-referral-code");
+const reviewServices = document.getElementById("review-services");
 const editNewCustomerBtn = document.getElementById("edit-new-customer-btn");
 const confirmNewCustomerBtn = document.getElementById("confirm-new-customer-btn");
+
+const existingCustomerServiceScreen = document.getElementById("existing-customer-service-screen");
+const existingServiceSearchInput = document.getElementById("existing-service-search");
+const existingServiceList = document.getElementById("existing-service-list");
+const backToExistingCustomerBtn = document.getElementById("back-to-existing-customer-btn");
+const continueToExistingReviewBtn = document.getElementById("continue-to-existing-review-btn");
+
+const existingCustomerReviewScreen = document.getElementById("existing-customer-review-screen");
+const existingReviewFullName = document.getElementById("existing-review-full-name");
+const existingReviewPhone = document.getElementById("existing-review-phone");
+const existingReviewEmail = document.getElementById("existing-review-email");
+const existingReviewReferralCode = document.getElementById("existing-review-referral-code");
+const existingReviewServices = document.getElementById("existing-review-services");
+const editExistingCustomerBtn = document.getElementById("edit-existing-customer-btn");
+const confirmExistingCustomerBtn = document.getElementById("confirm-existing-customer-btn");
 
 const updateProfileScreen = document.getElementById("update-profile-screen");
 const updateProfileForm = document.getElementById("update-profile-form");
@@ -52,6 +74,11 @@ const CREATE_CUSTOMER_URL = `${API_BASE}/customers/new`;
 let phoneNumber = "";
 let existingCustomer = null;
 let pendingNewCustomerPayload = null;
+let pendingExistingReferralCode = "";
+
+let availableServices = [];
+let selectedNewServiceIds = [];
+let selectedExistingServiceIds = [];
 
 const carouselSlides = [
   {
@@ -130,7 +157,6 @@ function formatDateForDisplay(dateValue) {
 function isValidDOB(dateString) {
   if (!dateString || typeof dateString !== "string") return false;
 
-  // Must be exactly YYYY-MM-DD
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString)) return false;
 
   const [yearStr, monthStr, dayStr] = dateString.split("-");
@@ -138,16 +164,13 @@ function isValidDOB(dateString) {
   const month = Number(monthStr);
   const day = Number(dayStr);
 
-  // Enforce exactly 4-digit year
   if (yearStr.length !== 4) return false;
-
   if (year < 1900 || year > new Date().getFullYear()) return false;
   if (month < 1 || month > 12) return false;
   if (day < 1 || day > 31) return false;
 
   const date = new Date(year, month - 1, day);
 
-  // Reject invalid dates like 2026-02-31
   if (
     date.getFullYear() !== year ||
     date.getMonth() + 1 !== month ||
@@ -190,6 +213,183 @@ function validateDOBInput() {
 
   dobInput.setCustomValidity("");
   return true;
+}
+
+function getErrorMessage(data, fallback = "Something went wrong.") {
+  if (!data) return fallback;
+
+  if (typeof data === "string") return data;
+
+  if (Array.isArray(data.detail)) {
+    return data.detail
+      .map(item => {
+        if (typeof item === "string") return item;
+        if (item?.msg) return item.msg;
+        return JSON.stringify(item);
+      })
+      .join(", ");
+  }
+
+  if (typeof data.detail === "string") return data.detail;
+
+  if (data.detail && typeof data.detail === "object") {
+    if (data.detail.msg) return data.detail.msg;
+    return JSON.stringify(data.detail);
+  }
+
+  return fallback;
+}
+
+function getServiceNameById(id) {
+  const service = availableServices.find(item => item.id === id);
+  return service ? service.name : `Service ${id}`;
+}
+
+function formatServiceNamesFromIds(ids) {
+  if (!ids || ids.length === 0) return "No services selected";
+  return ids.map(getServiceNameById).join(", ");
+}
+
+// ── Services ──────────────────────────────────────────────────
+
+async function loadServices() {
+  try {
+    const response = await fetch(`${API_BASE}/services`);
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(getErrorMessage(data, "Failed to load services."));
+    }
+
+    availableServices = Array.isArray(data) ? data : [];
+
+    renderServiceList(newServiceList, selectedNewServiceIds, newServiceSearchInput?.value || "");
+    renderServiceList(existingServiceList, selectedExistingServiceIds, existingServiceSearchInput?.value || "");
+  } catch (error) {
+    console.error("Failed to load services:", error);
+    if (newServiceList) {
+      newServiceList.innerHTML = `<p class="queue-empty">Unable to load services.</p>`;
+    }
+    if (existingServiceList) {
+      existingServiceList.innerHTML = `<p class="queue-empty">Unable to load services.</p>`;
+    }
+  }
+}
+
+function renderServiceList(container, selectedServiceIds, searchTerm = "") {
+  if (!container) return;
+
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+
+  const filteredServices = availableServices.filter(service =>
+    service.name.toLowerCase().includes(normalizedSearch)
+  );
+
+  if (filteredServices.length === 0) {
+    container.innerHTML = `<p class="queue-empty">No matching services found.</p>`;
+    return;
+  }
+
+  container.innerHTML = filteredServices
+    .map(service => {
+      const checked = selectedServiceIds.includes(service.id) ? "checked" : "";
+      const safeId = `service_${service.id}`;
+      return `
+        <label class="service-option" for="${container.id}_${safeId}">
+          <input
+            type="checkbox"
+            id="${container.id}_${safeId}"
+            value="${service.id}"
+            ${checked}
+          />
+          <span>${service.name}</span>
+        </label>
+      `;
+    })
+    .join("");
+}
+
+function toggleServiceSelection(serviceId, selectedServiceIdsRef) {
+  const index = selectedServiceIdsRef.indexOf(serviceId);
+
+  if (index >= 0) {
+    selectedServiceIdsRef.splice(index, 1);
+  } else {
+    selectedServiceIdsRef.push(serviceId);
+  }
+}
+
+function bindServiceListSelection(container, getSelectedServiceIds, searchInput) {
+  if (!container) return;
+
+  container.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.type !== "checkbox") return;
+
+    const selectedServiceIdsRef = getSelectedServiceIds();
+    const serviceId = Number(target.value);
+
+    if (!Number.isInteger(serviceId) || serviceId <= 0) return;
+
+    toggleServiceSelection(serviceId, selectedServiceIdsRef);
+
+    renderServiceList(
+      container,
+      selectedServiceIdsRef,
+      searchInput ? searchInput.value : ""
+    );
+  });
+}
+
+function showNewCustomerServiceScreen() {
+  renderServiceList(newServiceList, selectedNewServiceIds, newServiceSearchInput?.value || "");
+  hideAllMainScreens();
+  newCustomerServiceScreen.style.display = "block";
+  messageBox.textContent = "";
+  messageBox.className = "message";
+}
+
+function showExistingCustomerServiceScreen() {
+  renderServiceList(existingServiceList, selectedExistingServiceIds, existingServiceSearchInput?.value || "");
+  hideAllMainScreens();
+  existingCustomerServiceScreen.style.display = "block";
+  messageBox.textContent = "";
+  messageBox.className = "message";
+}
+
+function showNewCustomerReview(payload) {
+  pendingNewCustomerPayload = payload;
+
+  reviewFullName.textContent = safeText(payload.full_name);
+  reviewDob.textContent = formatDateForDisplay(payload.date_of_birth);
+  reviewEmail.textContent = safeText(payload.email);
+  reviewReferralCode.textContent = safeText(payload.referral_code);
+  reviewServices.textContent = formatServiceNamesFromIds(selectedNewServiceIds);
+
+  hideAllMainScreens();
+  newCustomerReviewScreen.style.display = "block";
+
+  messageBox.textContent = "";
+  messageBox.className = "message";
+}
+
+function showExistingCustomerReview() {
+  if (!existingCustomer) return;
+
+  existingReviewFullName.textContent = safeText(existingCustomer.full_name);
+  existingReviewPhone.textContent = safeText(
+    existingCustomer.phone_number_formatted || formatPhone(existingCustomer.phone_number || "")
+  );
+  existingReviewEmail.textContent = safeText(existingCustomer.email);
+  existingReviewReferralCode.textContent = safeText(pendingExistingReferralCode);
+  existingReviewServices.textContent = formatServiceNamesFromIds(selectedExistingServiceIds);
+
+  hideAllMainScreens();
+  existingCustomerReviewScreen.style.display = "block";
+
+  messageBox.textContent = "";
+  messageBox.className = "message";
 }
 
 // ── Carousel ──────────────────────────────────────────────────
@@ -243,8 +443,11 @@ function hideSuccessModal() {
 function hideAllMainScreens() {
   phoneScreen.style.display = "none";
   formScreen.style.display = "none";
+  newCustomerServiceScreen.style.display = "none";
   newCustomerReviewScreen.style.display = "none";
   existingScreen.style.display = "none";
+  existingCustomerServiceScreen.style.display = "none";
+  existingCustomerReviewScreen.style.display = "none";
   updateProfileScreen.style.display = "none";
   thankYouScreen.style.display = "none";
 }
@@ -311,7 +514,7 @@ async function loadTodayCheckInOrder() {
     const data = await response.json();
 
     if (!response.ok) {
-      throw new Error(data.detail || "Failed to load today's check-in order.");
+      throw new Error(getErrorMessage(data, "Failed to load today's check-in order."));
     }
 
     if (!data.checkins || data.checkins.length === 0) {
@@ -345,6 +548,12 @@ function resetToMainScreen() {
 
   if (phoneInput) phoneInput.value = "";
   if (dobInput) dobInput.value = "";
+  if (newServiceSearchInput) newServiceSearchInput.value = "";
+  if (existingServiceSearchInput) existingServiceSearchInput.value = "";
+
+  selectedNewServiceIds.length = 0;
+  selectedExistingServiceIds.length = 0;
+  pendingExistingReferralCode = "";
 
   hideAllMainScreens();
   phoneScreen.style.display = "block";
@@ -392,6 +601,23 @@ if (dobInput) {
   dobInput.addEventListener("change", validateDOBInput);
 }
 
+// ── Service search + checkbox binding ────────────────────────
+
+if (newServiceSearchInput) {
+  newServiceSearchInput.addEventListener("input", () => {
+    renderServiceList(newServiceList, selectedNewServiceIds, newServiceSearchInput.value);
+  });
+}
+
+if (existingServiceSearchInput) {
+  existingServiceSearchInput.addEventListener("input", () => {
+    renderServiceList(existingServiceList, selectedExistingServiceIds, existingServiceSearchInput.value);
+  });
+}
+
+bindServiceListSelection(newServiceList, () => selectedNewServiceIds, newServiceSearchInput);
+bindServiceListSelection(existingServiceList, () => selectedExistingServiceIds, existingServiceSearchInput);
+
 // ── Phone form ────────────────────────────────────────────────
 
 phoneForm.addEventListener("submit", async (event) => {
@@ -422,7 +648,7 @@ phoneForm.addEventListener("submit", async (event) => {
       const statusData = await statusResponse.json();
 
       if (!statusResponse.ok) {
-        throw new Error(statusData.detail || "Failed to check today's status.");
+        throw new Error(getErrorMessage(statusData, "Failed to check today's status."));
       }
 
       if (statusData.already_checked_in_today) {
@@ -440,6 +666,8 @@ phoneForm.addEventListener("submit", async (event) => {
     if (response.status === 404) {
       existingCustomer = null;
       pendingNewCustomerPayload = null;
+      selectedNewServiceIds.length = 0;
+      if (newServiceSearchInput) newServiceSearchInput.value = "";
       messageBox.textContent = "";
       hideAllMainScreens();
       formScreen.style.display = "block";
@@ -447,14 +675,14 @@ phoneForm.addEventListener("submit", async (event) => {
     }
 
     const data = await response.json();
-    throw new Error(data.detail || "Something went wrong while checking phone number.");
+    throw new Error(getErrorMessage(data, "Something went wrong while checking phone number."));
   } catch (error) {
     messageBox.textContent = error.message || "Failed to check phone number.";
     messageBox.className = "message error";
   }
 });
 
-// ── New customer review flow ──────────────────────────────────
+// ── New customer flow ─────────────────────────────────────────
 
 function buildNewCustomerPayload() {
   const formData = new FormData(customerForm);
@@ -465,23 +693,8 @@ function buildNewCustomerPayload() {
     full_name: formData.get("full_name")?.trim(),
     email: formData.get("email")?.trim() || null,
     date_of_birth: formData.get("date_of_birth"),
-    referral_code: referralCode || null,
+    referral_code: referralCode || null
   };
-}
-
-function showNewCustomerReview(payload) {
-  pendingNewCustomerPayload = payload;
-
-  reviewFullName.textContent = safeText(payload.full_name);
-  reviewDob.textContent = formatDateForDisplay(payload.date_of_birth);
-  reviewEmail.textContent = safeText(payload.email);
-  reviewReferralCode.textContent = safeText(payload.referral_code);
-
-  hideAllMainScreens();
-  newCustomerReviewScreen.style.display = "block";
-
-  messageBox.textContent = "";
-  messageBox.className = "message";
 }
 
 customerForm.addEventListener("submit", async (event) => {
@@ -496,11 +709,12 @@ customerForm.addEventListener("submit", async (event) => {
     return;
   }
 
-  showNewCustomerReview(payload);
+  pendingNewCustomerPayload = payload;
+  showNewCustomerServiceScreen();
 });
 
-if (editNewCustomerBtn) {
-  editNewCustomerBtn.addEventListener("click", () => {
+if (backToNewCustomerFormBtn) {
+  backToNewCustomerFormBtn.addEventListener("click", () => {
     hideAllMainScreens();
     formScreen.style.display = "block";
     messageBox.textContent = "";
@@ -508,38 +722,92 @@ if (editNewCustomerBtn) {
   });
 }
 
+if (continueToNewReviewBtn) {
+  continueToNewReviewBtn.addEventListener("click", () => {
+    if (!pendingNewCustomerPayload) {
+      pendingNewCustomerPayload = buildNewCustomerPayload();
+    }
+
+    if (selectedNewServiceIds.length === 0) {
+      messageBox.textContent = "Please select at least one service.";
+      messageBox.className = "message error";
+      return;
+    }
+
+    showNewCustomerReview(pendingNewCustomerPayload);
+  });
+}
+
+if (editNewCustomerBtn) {
+  editNewCustomerBtn.addEventListener("click", () => {
+    showNewCustomerServiceScreen();
+  });
+}
+
 if (confirmNewCustomerBtn) {
-  confirmNewCustomerBtn.addEventListener("click", async () => {
+  confirmNewCustomerBtn.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+
     if (!pendingNewCustomerPayload) return;
 
+    if (selectedNewServiceIds.length === 0) {
+      messageBox.textContent = "Please select at least one service.";
+      messageBox.className = "message error";
+      return;
+    }
+
+    confirmNewCustomerBtn.disabled = true;
     messageBox.textContent = "Saving customer...";
     messageBox.className = "message";
 
     try {
+      let referralAppliedMessage = "";
+      const referralCode = pendingNewCustomerPayload.referral_code || "";
+
+      // 1. Validate referral first
+      if (referralCode) {
+        const validateResponse = await fetch(`${API_BASE}/referrals/validate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            phone_number: phoneNumber,
+            referral_code: referralCode
+          })
+        });
+
+        const validateData = await validateResponse.json();
+        if (!validateResponse.ok) {
+          throw new Error(getErrorMessage(validateData, "Referral code not found or invalid."));
+        }
+      }
+
+      // 2. Create customer only after referral is valid
       const createResponse = await fetch(CREATE_CUSTOMER_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(pendingNewCustomerPayload),
+        body: JSON.stringify(pendingNewCustomerPayload)
       });
 
       const createData = await createResponse.json();
       if (!createResponse.ok) {
-        throw new Error(createData.detail || "Failed to create customer.");
+        throw new Error(getErrorMessage(createData, "Failed to create customer."));
       }
 
-      let referralAppliedMessage = "";
-      const referralCode = pendingNewCustomerPayload.referral_code || "";
-
+      // 3. Apply referral after customer exists
       if (referralCode) {
         const applyResponse = await fetch(`${API_BASE}/referrals/apply`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone_number: phoneNumber, referral_code: referralCode }),
+          body: JSON.stringify({
+            phone_number: phoneNumber,
+            referral_code: referralCode
+          })
         });
 
         const applyData = await applyResponse.json();
         if (!applyResponse.ok) {
-          throw new Error(applyData.detail || "Failed to apply referral code.");
+          throw new Error(getErrorMessage(applyData, "Referral code not found or invalid."));
         }
 
         referralAppliedMessage = `You’ve received ${applyData.discount_percent}% off today as a referral reward from ${applyData.referral_from_customer_name}.`;
@@ -547,12 +815,18 @@ if (confirmNewCustomerBtn) {
 
       const checkInResponse = await fetch(
         `${API_BASE}/customers/check-in/${encodeURIComponent(phoneNumber)}`,
-        { method: "POST" }
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            selected_service_ids: selectedNewServiceIds
+          })
+        }
       );
 
       const checkInData = await checkInResponse.json();
       if (!checkInResponse.ok) {
-        throw new Error(checkInData.detail || "Failed to check in customer.");
+        throw new Error(getErrorMessage(checkInData, "Failed to check in customer."));
       }
 
       const birthdayDiscount = checkInData.discounts_applied?.find(d => d.type === "birthday");
@@ -579,8 +853,143 @@ Your personal referral code is ${checkInData.referral_code}.
 Share it with friends and give them 10% off their visit.`;
       }
 
+      messageBox.textContent = "";
+      messageBox.className = "message";
+
+      await loadTodayCheckInOrder();
+
+      if (birthdayDiscount || referralAppliedMessage || referralRewardDiscount || earnedReferralCode) {
+        showSuccessModal(successText);
+      }
+
+      const selectedServicesText = formatServiceNamesFromIds(selectedNewServiceIds);
+
+      pendingNewCustomerPayload = null;
+      selectedNewServiceIds.length = 0;
+
+      showThankYouScreen(
+        `You are checked in for: ${selectedServicesText}. Please take a seat and relax. A technician will be with you shortly.`
+      );
+    } catch (error) {
+      console.error("New customer confirm error:", error);
+      messageBox.textContent = error.message || "Failed to save customer.";
+      messageBox.className = "message error";
+      messageBox.scrollIntoView({ behavior: "smooth", block: "center" });
+    } finally {
+      confirmNewCustomerBtn.disabled = false;
+    }
+  });
+}
+
+// ── Returning customer flow ───────────────────────────────────
+
+existingCustomerForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const referralCodeInput = document.getElementById("existing_referral_code");
+  pendingExistingReferralCode = referralCodeInput.value.trim().toUpperCase();
+
+  showExistingCustomerServiceScreen();
+});
+
+if (backToExistingCustomerBtn) {
+  backToExistingCustomerBtn.addEventListener("click", () => {
+    openExistingCustomerScreen();
+  });
+}
+
+if (continueToExistingReviewBtn) {
+  continueToExistingReviewBtn.addEventListener("click", () => {
+    if (selectedExistingServiceIds.length === 0) {
+      messageBox.textContent = "Please select at least one service.";
+      messageBox.className = "message error";
+      return;
+    }
+
+    showExistingCustomerReview();
+  });
+}
+
+if (editExistingCustomerBtn) {
+  editExistingCustomerBtn.addEventListener("click", () => {
+    showExistingCustomerServiceScreen();
+  });
+}
+
+if (confirmExistingCustomerBtn) {
+  confirmExistingCustomerBtn.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (selectedExistingServiceIds.length === 0) {
+      messageBox.textContent = "Please select at least one service.";
+      messageBox.className = "message error";
+      return;
+    }
+
+    confirmExistingCustomerBtn.disabled = true;
+    messageBox.textContent = "Processing check-in...";
+    messageBox.className = "message";
+
+    try {
+      let referralAppliedMessage = "";
+
+      if (pendingExistingReferralCode) {
+        const applyResponse = await fetch(`${API_BASE}/referrals/apply`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            phone_number: phoneNumber,
+            referral_code: pendingExistingReferralCode
+          })
+        });
+
+        const applyData = await applyResponse.json();
+        if (!applyResponse.ok) {
+          throw new Error(getErrorMessage(applyData, "Failed to apply referral code."));
+        }
+
+        referralAppliedMessage = `You’ve received ${applyData.discount_percent}% off today as a referral reward from ${applyData.referral_from_customer_name}.`;
+      }
+
+      const checkInResponse = await fetch(
+        `${API_BASE}/customers/check-in/${encodeURIComponent(phoneNumber)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            selected_service_ids: selectedExistingServiceIds
+          })
+        }
+      );
+
+      const checkInData = await checkInResponse.json();
+      if (!checkInResponse.ok) {
+        throw new Error(getErrorMessage(checkInData, "Failed to check in customer."));
+      }
+
+      const birthdayDiscount = checkInData.discounts_applied?.find(d => d.type === "birthday");
+      const referralRewardDiscount = checkInData.discounts_applied?.find(d => d.type === "referral");
+      const earnedReferralCode = !existingCustomer?.referral_code && !!checkInData.referral_code;
+
+      let successText = "";
+
       if (birthdayDiscount) {
-        showBirthdayModal(checkInData.full_name, birthdayDiscount.amount);
+        successText = `Happy Birthday, ${checkInData.full_name}! ✨
+Enjoy a complimentary $${birthdayDiscount.amount} birthday reward today.
+Sit back, relax, and let us take care of you.`;
+      } else if (referralAppliedMessage) {
+        successText = `Welcome back, ${checkInData.full_name}! ✨
+${referralAppliedMessage}
+Enjoy your salon experience.`;
+      } else if (referralRewardDiscount) {
+        successText = `Congratulations, ${checkInData.full_name}! ✨
+Your ${referralRewardDiscount.percent}% referral reward has been unlocked and applied today.
+Thank you for sharing the love with others.`;
+      } else if (earnedReferralCode) {
+        successText = `You’ve unlocked a special reward, ${checkInData.full_name}! ✨
+Your personal referral code is ${checkInData.referral_code}.
+Share it with friends and give them 10% off their visit.`;
       }
 
       messageBox.textContent = "";
@@ -592,95 +1001,24 @@ Share it with friends and give them 10% off their visit.`;
         showSuccessModal(successText);
       }
 
-      pendingNewCustomerPayload = null;
+      const selectedServicesText = formatServiceNamesFromIds(selectedExistingServiceIds);
 
-      showThankYouScreen("You are checked in. Please take a seat and relax. A technician will be with you shortly.");
+      selectedExistingServiceIds.length = 0;
+      pendingExistingReferralCode = "";
+
+      showThankYouScreen(
+        `Thank you for checking in for: ${selectedServicesText}. Please take a seat and enjoy your salon experience.`
+      );
     } catch (error) {
-      messageBox.textContent = error.message || "Failed to save customer.";
+      console.error("Returning customer confirm error:", error);
+      messageBox.textContent = error.message || "Failed to process returning customer.";
       messageBox.className = "message error";
+      messageBox.scrollIntoView({ behavior: "smooth", block: "center" });
+    } finally {
+      confirmExistingCustomerBtn.disabled = false;
     }
   });
 }
-
-// ── Returning customer ────────────────────────────────────────
-
-existingCustomerForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-
-  const referralCodeInput = document.getElementById("existing_referral_code");
-  const referralCode = referralCodeInput.value.trim().toUpperCase();
-
-  try {
-    let referralAppliedMessage = "";
-
-    if (referralCode) {
-      const applyResponse = await fetch(`${API_BASE}/referrals/apply`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone_number: phoneNumber, referral_code: referralCode }),
-      });
-
-      const applyData = await applyResponse.json();
-      if (!applyResponse.ok) {
-        throw new Error(applyData.detail || "Failed to apply referral code.");
-      }
-
-      referralAppliedMessage = `You’ve received ${applyData.discount_percent}% off today as a referral reward from ${applyData.referral_from_customer_name}.`;
-    }
-
-    const checkInResponse = await fetch(
-      `${API_BASE}/customers/check-in/${encodeURIComponent(phoneNumber)}`,
-      { method: "POST" }
-    );
-
-    const checkInData = await checkInResponse.json();
-    if (!checkInResponse.ok) {
-      throw new Error(checkInData.detail || "Failed to check in customer.");
-    }
-
-    const birthdayDiscount = checkInData.discounts_applied?.find(d => d.type === "birthday");
-    const referralRewardDiscount = checkInData.discounts_applied?.find(d => d.type === "referral");
-    const earnedReferralCode = !existingCustomer?.referral_code && !!checkInData.referral_code;
-
-    let successText = "";
-
-    if (birthdayDiscount) {
-      successText = `Happy Birthday, ${checkInData.full_name}! ✨
-Enjoy a complimentary $${birthdayDiscount.amount} birthday reward today.
-Sit back, relax, and let us take care of you.`;
-    } else if (referralAppliedMessage) {
-      successText = `Welcome back, ${checkInData.full_name}! ✨
-${referralAppliedMessage}
-Enjoy your salon experience.`;
-    } else if (referralRewardDiscount) {
-      successText = `Congratulations, ${checkInData.full_name}! ✨
-Your ${referralRewardDiscount.percent}% referral reward has been unlocked and applied today.
-Thank you for sharing the love with others.`;
-    } else if (earnedReferralCode) {
-      successText = `You’ve unlocked a special reward, ${checkInData.full_name}! ✨
-Your personal referral code is ${checkInData.referral_code}.
-Share it with friends and give them 10% off their visit.`;
-    }
-
-    if (birthdayDiscount) {
-      showBirthdayModal(checkInData.full_name, birthdayDiscount.amount);
-    }
-
-    messageBox.textContent = "";
-    messageBox.className = "message";
-
-    await loadTodayCheckInOrder();
-
-    if (birthdayDiscount || referralAppliedMessage || referralRewardDiscount || earnedReferralCode) {
-      showSuccessModal(successText);
-    }
-
-    showThankYouScreen("Thank you for checking in. Please take a seat and enjoy your salon experience.");
-  } catch (error) {
-    messageBox.textContent = error.message || "Failed to process returning customer.";
-    messageBox.className = "message error";
-  }
-});
 
 // ── Update profile ────────────────────────────────────────────
 
@@ -733,15 +1071,15 @@ if (updateProfileForm) {
           body: JSON.stringify({
             full_name: updatedFullName,
             phone_number: updatedPhone,
-            email: updatedEmail || null,
-          }),
+            email: updatedEmail || null
+          })
         }
       );
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.detail || "Failed to update profile.");
+        throw new Error(getErrorMessage(data, "Failed to update profile."));
       }
 
       existingCustomer = data;
@@ -767,4 +1105,5 @@ if (updateProfileForm) {
 
 startCarousel();
 loadTodayCheckInOrder();
+loadServices();
 setInterval(loadTodayCheckInOrder, 10000);

@@ -1,7 +1,8 @@
-from typing import Optional
-from pydantic import BaseModel, computed_field, field_validator
-from datetime import date, datetime
 import re
+from datetime import date, datetime
+from typing import Optional
+
+from pydantic import BaseModel, computed_field, field_validator
 
 
 def format_phone_display(digits: str) -> str:
@@ -26,6 +27,26 @@ class CustomerCreate(BaseModel):
     @classmethod
     def check_phone(cls, v: str) -> str:
         return validate_phone(v)
+
+
+class ServiceResponse(BaseModel):
+    id: int
+    name: str
+
+    model_config = {"from_attributes": True}
+
+
+class CheckInCreate(BaseModel):
+    selected_service_ids: list[int]
+
+    @field_validator("selected_service_ids")
+    @classmethod
+    def validate_service_ids(cls, v: list[int]) -> list[int]:
+        cleaned = [int(item) for item in v if int(item) > 0]
+        unique_ids = list(dict.fromkeys(cleaned))
+        if not unique_ids:
+            raise ValueError("Please select at least one service.")
+        return unique_ids
 
 
 class CustomerResponse(BaseModel):
@@ -64,6 +85,7 @@ class CheckInResponse(BaseModel):
     birthday_discount_available: bool
     birthday_discount_amount: int
     discounts_applied: list = []
+    selected_services: list[str] = []
 
 
 class ApplyReferralCodeRequest(BaseModel):
