@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nail Salon Calendar</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="logo">
+        <div class="logo-mark">✦</div>
+        <div>
+          <h1>Nail Salon</h1>
+          <p>Salon System</p>
+        </div>
+      </div>
+
+      <nav class="menu">
+        <button id="navCustomerList" class="menu-item">Customer List</button>
+        <button id="navTechnician" class="menu-item">Nail Technician</button>
+        <button id="navAppointment" class="menu-item">Make Appointment</button>
+        <button id="navInventory" class="menu-item">Inventory</button>
+        <button id="navCheckout" class="menu-item">Checkout</button>
+      </nav>
+
+      <div class="menu-footer">
+        <p class="footer-title">Backend Status</p>
+        <div class="api-status">
+          <span id="api-dot" class="dot offline"></span>
+          <span id="api-text">Checking backend...</span>
+        </div>
+        <p class="api-url">http://127.0.0.1:8000</p>
+      </div>
+    </aside>
+
+    <main class="main">
+      <!-- CALENDAR VIEW -->
+      <section id="calendarView" class="view active-view">
+        <header class="topbar topbar-centered">
+          <h2>Calendar</h2>
+        </header>
+
+        <div class="toolbar toolbar-centered">
+          <div class="toolbar-center toolbar-center-only">
+            <button id="prevDayBtn" class="ghost-btn">‹</button>
+            <button id="todayBtn" class="today-btn">Today</button>
+            <div id="dateLabel" class="date-pill"></div>
+            <button id="nextDayBtn" class="ghost-btn">›</button>
+          </div>
+        </div>
+
+        <section class="calendar-layout">
+          <div class="calendar-card">
+            <div id="calendarWrapper" class="calendar-wrapper">
+              <div class="empty-state">Loading calendar...</div>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <!-- CUSTOMER LIST VIEW -->
+      <section id="customerListView" class="view">
+        <header class="topbar">
+          <div>
+            <h2>Live Check-In Queue</h2>
+            <p class="subtitle">View and manage waiting customers</p>
+          </div>
+          <button class="back-btn">← Back</button>
+        </header>
+
+        <div class="form-card">
+          <div id="liveCheckinQueue" class="tech-cards"></div>
+
+          <div class="live-queue-footer">
+            <button type="button" id="queueAutoAssignBtn" class="primary-btn queue-auto-assign-btn">
+              Auto Assign
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- INVENTORY VIEW -->
+      <section id="inventoryView" class="view">
+        <header class="topbar">
+          <div>
+            <h2>Salon Inventory</h2>
+            <p class="subtitle">Track supplies, value, and weekly / monthly / yearly expenses</p>
+          </div>
+          <button class="back-btn">← Back</button>
+        </header>
+
+        <div class="inventory-summary-grid">
+          <div class="summary-card">
+            <span class="summary-label">Total Inventory Value</span>
+            <strong id="inventoryTotalValue">$0.00</strong>
+          </div>
+
+          <div class="summary-card">
+            <span class="summary-label">Weekly Expense</span>
+            <strong id="inventoryWeeklyExpense">$0.00</strong>
+          </div>
+
+          <div class="summary-card">
+            <span class="summary-label">Monthly Expense</span>
+            <strong id="inventoryMonthlyExpense">$0.00</strong>
+          </div>
+
+          <div class="summary-card">
+            <span class="summary-label">Yearly Expense</span>
+            <strong id="inventoryYearlyExpense">$0.00</strong>
+          </div>
+
+          <div class="summary-card">
+            <span class="summary-label">Low Stock Items</span>
+            <strong id="inventoryLowStockCount">0</strong>
+          </div>
+        </div>
+
+        <div class="form-card">
+          <div class="section-header">
+            <h3 id="inventoryFormTitle">Add Inventory Item</h3>
+            <button type="button" id="cancelInventoryEditBtn" class="ghost-btn hidden">Cancel Edit</button>
+          </div>
+
+          <form id="inventoryForm" class="inventory-form-layout">
+            <input type="hidden" id="inventory_id" />
+
+            <div class="form-section">
+              <h4>Item Information</h4>
+              <div class="form-grid">
+                <div>
+                  <label for="inventory_item_name">Item Name</label>
+                  <input type="text" id="inventory_item_name" placeholder="Acetone, Gloves, Towels..." required />
+                </div>
+
+                <div>
+                  <label for="inventory_category">Category</label>
+                  <select id="inventory_category" required>
+                    <option value="">Select category</option>
+                    <option value="Entryway">Entryway</option>
+                    <option value="Tools">Tools</option>
+                    <option value="Equipment">Equipment</option>
+                    <option value="Nail Supplies">Nail Supplies</option>
+                    <option value="Cleaning">Cleaning</option>
+                    <option value="Front Desk">Front Desk</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label for="inventory_supplier">Supplier</label>
+                  <input type="text" id="inventory_supplier" placeholder="Supplier name" />
+                </div>
+
+                <div>
+                  <label for="inventory_quantity">Quantity</label>
+                  <input type="number" id="inventory_quantity" min="0" value="1" required />
+                </div>
+
+                <div>
+                  <label for="inventory_unit_price">Unit Price</label>
+                  <input type="number" id="inventory_unit_price" min="0" step="0.01" value="0" required />
+                </div>
+
+                <div>
+                  <label for="inventory_purchase_date">Purchase Date</label>
+                  <input type="date" id="inventory_purchase_date" />
+                </div>
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" class="primary-btn" id="saveInventoryBtn">Save Item</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="form-card">
+          <div class="section-header">
+            <h3>Inventory List</h3>
+
+            <div class="toolbar-filters inventory-filters">
+              <input type="text" id="inventorySearch" placeholder="Search item name" />
+
+              <select id="inventoryCategoryFilter">
+                <option value="">All Categories</option>
+                <option value="Entryway">Entryway</option>
+                <option value="Tools">Tools</option>
+                <option value="Equipment">Equipment</option>
+                <option value="Nail Supplies">Nail Supplies</option>
+                <option value="Cleaning">Cleaning</option>
+                <option value="Front Desk">Front Desk</option>
+                <option value="Other">Other</option>
+              </select>
+
+              <select id="inventoryStockFilter">
+                <option value="">All Stock</option>
+                <option value="low">Low Stock Only</option>
+                <option value="ok">In Stock Only</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="inventory-table-wrap">
+            <table class="inventory-table">
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Item Name</th>
+                  <th>Qty</th>
+                  <th>Unit Price</th>
+                  <th>Total Value</th>
+                  <th>Supplier</th>
+                  <th>Purchase Date</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="inventoryTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- CHECKOUT VIEW -->
+      <section id="checkoutView" class="view">
+        <header class="topbar">
+          <div>
+            <h2>Customer Ready for Checkout</h2>
+            <p class="subtitle">Complete payment, discounts, tips, and 60/40 split</p>
+          </div>
+          <button class="back-btn">← Back</button>
+        </header>
+        
+        <div class="form-card">
+
+        <div id="checkoutReadyList" class="tech-cards"></div>
+      </div>
+
+        <div class="form-card">
+          <div class="section-header">
+            <button type="button" id="cancelCheckoutEditBtn" class="ghost-btn hidden">Cancel Edit</button>
+          </div>
+
+          <form id="checkoutForm" class="appointment-form-layout">
+            <input type="hidden" id="checkout_id" />
+            <input type="hidden" id="checkout_turn_id" />
+            <input type="hidden" id="checkout_appointment_id" />
+            <input type="hidden" id="checkout_technician_id" />
+
+            <div class="form-section">
+  <h4>Customer & Technician</h4>
+  <div class="checkout-top-row">
+    <div>
+      <label for="checkout_customer_name">Customer Name</label>
+      <input type="text" id="checkout_customer_name" placeholder="Customer name" required readonly />
+    </div>
+
+    <div>
+      <label for="checkout_customer_phone">Phone Number</label>
+      <input type="text" id="checkout_customer_phone" placeholder="(555) 123-4567" readonly />
+    </div>
+
+    <div>
+  <label for="checkout_technician_name">Technician</label>
+  <input type="text" id="checkout_technician_name" placeholder="Assigned technician" readonly />
+</div>
+
+    <div>
+  <label for="checkout_payment_method">Payment Method</label>
+  <select id="checkout_payment_method">
+    <option value="cash">Cash</option>
+    <option value="card">Card</option>
+    <option value="zelle">Zelle</option>
+    <option value="gift card">Gift Card</option>
+  </select>
+</div>
+  </div>
+</div>
+
+            <div class="form-section">
+              <h4>Service & Discount</h4>
+              <div class="form-grid">
+                <div>
+                  <label for="checkout_service_name">Service</label>
+                  <input type="text" id="checkout_service_name" placeholder="Service name" required readonly />
+                </div>
+
+                <div>
+                  <label for="checkout_subtotal">Service Subtotal</label>
+                  <input type="number" id="checkout_subtotal" min="0" step="0.01" value="0" required />
+                </div>
+
+                <div>
+                  <label for="checkout_discount_type">Discount Type</label>
+                  <select id="checkout_discount_type">
+                    <option value="none">None</option>
+                    <option value="fixed">Fixed Amount</option>
+                    <option value="percent">Percent</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label for="checkout_discount_value">Discount Value</label>
+                  <input type="number" id="checkout_discount_value" min="0" step="0.01" value="0" />
+                </div>
+
+                <div>
+                  <label for="checkout_discount_paid_by">Discount Paid By</label>
+                  <select id="checkout_discount_paid_by">
+                    <option value="owner">Owner</option>
+                    <option value="technician">Technician</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label for="checkout_tip">Tip</label>
+                  <input type="number" id="checkout_tip" min="0" step="0.01" value="0" />
+                </div>
+              </div>
+            </div>
+
+            <div class="form-section">
+              <h4>Split Summary</h4>
+              <div class="inventory-summary-grid">
+                <div class="summary-card">
+                  <span class="summary-label">Gross Service</span>
+                  <strong id="checkoutGross">$0.00</strong>
+                </div>
+
+                <div class="summary-card">
+                  <span class="summary-label">Discount</span>
+                  <strong id="checkoutDiscount">$0.00</strong>
+                </div>
+
+                <div class="summary-card">
+                  <span class="summary-label">Net Service</span>
+                  <strong id="checkoutNet">$0.00</strong>
+                </div>
+
+                <div class="summary-card">
+                  <span class="summary-label">Technician 60%</span>
+                  <strong id="checkoutTechShare">$0.00</strong>
+                </div>
+
+                <div class="summary-card">
+                  <span class="summary-label">Salon 40%</span>
+                  <strong id="checkoutSalonShare">$0.00</strong>
+                </div>
+
+                <div class="summary-card">
+                  <span class="summary-label">Salon Actual Revenue</span>
+                  <strong id="checkoutSalonActual">$0.00</strong>
+                </div>
+
+                <div class="summary-card">
+                  <span class="summary-label">Technician Total</span>
+                  <strong id="checkoutTechTotal">$0.00</strong>
+                </div>
+
+                <div class="summary-card">
+                  <span class="summary-label">Customer Pays</span>
+                  <strong id="checkoutCustomerPays">$0.00</strong>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-section">
+              <h4>Notes</h4>
+              <div class="form-grid form-grid-1">
+                <div>
+                  <label for="checkout_note">Note</label>
+                  <textarea id="checkout_note" rows="4" placeholder="Optional checkout note"></textarea>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" class="primary-btn" id="saveCheckoutBtn">Complete Checkout</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- TECHNICIAN VIEW -->
+      <section id="technicianView" class="view">
+        <header class="topbar">
+          <div>
+            <h2>Add Technician</h2>
+            <p class="subtitle">Manage staff profiles, schedules, and availability</p>
+          </div>
+          <button class="back-btn">← Back</button>
+        </header>
+
+        <div class="form-card">
+          <div class="section-header">
+             <h3 id="techFormTitle">Technician Information</h3>
+            <button type="button" id="cancelEditBtn" class="ghost-btn hidden">Cancel Edit</button>
+          </div>
+
+          <form id="technicianForm" class="tech-form-layout">
+            <input type="hidden" id="tech_id" />
+
+            <div class="form-section">
+
+              <div class="form-grid">
+                <div>
+                  <label for="tech_name">Technician Name</label>
+                  <input type="text" id="tech_name" placeholder="Technician name" required />
+                </div>
+
+                <div>
+                  <label for="tech_phone">Phone Number</label>
+                  <input type="text" id="tech_phone" placeholder="(555) 123-4567" />
+                </div>
+
+                <div>
+                  <label for="tech_start_date">Start Date</label>
+                  <input type="date" id="tech_start_date" min="2000-01-01" max="2100-12-31" />
+                </div>
+              </div>
+
+              <div class="work-info-top">
+                <div class="work-info-specialties">
+                  <label>Specialties</label>
+
+                  <div id="tech_specialties" class="specialty-checkbox-list">
+                    <label class="checkbox-item" data-value="manicure / pedicure (gel)">
+                      <input type="checkbox" value="manicure / pedicure (gel)" />
+                      <span>Manicure / Pedicure (Gel)</span>
+                    </label>
+
+                    <label class="checkbox-item" data-value="acrylic">
+                      <input type="checkbox" value="acrylic" />
+                      <span>Acrylic</span>
+                    </label>
+
+                    <label class="checkbox-item" data-value="dipping">
+                      <input type="checkbox" value="dipping" />
+                      <span>Dipping</span>
+                    </label>
+
+                    <label class="checkbox-item" data-value="acrylic (nail art)">
+                      <input type="checkbox" value="acrylic (nail art)" />
+                      <span>Acrylic (Nail Art)</span>
+                    </label>
+
+                    <label class="checkbox-item" data-value="hard gel">
+                      <input type="checkbox" value="hard gel" />
+                      <span>Hard Gel</span>
+                    </label>
+
+                    <label class="checkbox-item" data-value="builder gel">
+                      <input type="checkbox" value="builder gel" />
+                      <span>Builder Gel</span>
+                    </label>
+
+                    <label class="checkbox-item" data-value="gel x">
+                      <input type="checkbox" value="gel x" />
+                      <span>Gel X</span>
+                    </label>
+
+                    <label class="checkbox-item" data-value="waxing">
+                      <input type="checkbox" value="waxing" />
+                      <span>Waxing</span>
+                    </label>
+
+                    <label class="checkbox-item" data-value="facial">
+                      <input type="checkbox" value="facial" />
+                      <span>Facial</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="work-info-add-side">
+                  <div class="specialty-actions specialty-actions-vertical">
+                    <input type="text" id="new_specialty_input" placeholder="Add new service" />
+                    <button type="button" id="addSpecialtyBtn" class="mini-btn">Add</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="work-info-bottom">
+                <div>
+                  <label for="tech_status">Status</label>
+                  <select id="tech_status">
+                    <option value="off">Off</option>
+                    <option value="active">Active</option>
+                    <option value="unavailable">Unavailable</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label for="tech_availability">Availability</label>
+                  <select id="tech_availability">
+                    <option value="off today">Off Today</option>
+                    <option value="available today">Available Today</option>
+                    <option value="on break">On Break</option>
+                    <option value="busy">Busy</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label for="tech_schedule">Work Schedule</label>
+                  <input type="text" id="tech_schedule" placeholder="Mon-Fri 9:00 AM - 5:00 PM" />
+                </div>
+
+                <div>
+                  <label for="tech_skills">Skills</label>
+                  <input type="text" id="tech_skills" placeholder="Detailed skill notes" />
+                </div>
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" class="primary-btn" id="saveTechBtn">Save Technician</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="form-card">
+          <div class="section-header technician-list-header">
+  <h3>Technician Directory</h3>
+  <div class="toolbar-filters technician-filters">
+    <input type="text" id="techSearch" placeholder="Search by name" />
+    <select id="techFilterSpecialty">
+      <option value="">All Specialties</option>
+      <option value="manicure / pedicure (gel)">Manicure / Pedicure (Gel)</option>
+      <option value="acrylic">Acrylic</option>
+      <option value="dipping">Dipping</option>
+      <option value="acrylic (nail art)">Acrylic (Nail Art)</option>
+      <option value="hard gel">Hard Gel</option>
+      <option value="builder gel">Builder Gel</option>
+      <option value="gel x">Gel X</option>
+      <option value="waxing">Waxing</option>
+      <option value="facial">Facial</option>
+    </select>
+    <select id="techFilterStatus">
+      <option value="">All Status</option>
+      <option value="off">Off</option>
+      <option value="active">Active</option>
+      <option value="unavailable">Unavailable</option>
+    </select>
+  </div>
+</div>
+
+          <div id="technicianCards" class="tech-cards"></div>
+        </div>
+      </section>
+
+      <!-- APPOINTMENT VIEW -->
+      <section id="appointmentView" class="view">
+        <header class="topbar">
+          <div>
+            <h2>Appointment Form</h2>
+            <p class="subtitle">Create a professional and detailed appointment</p>
+          </div>
+          <button class="back-btn">← Back</button>
+        </header>
+
+        <div class="form-card">
+          <div class="section-header">
+            <h3 id="appointmentFormTitle" class="hidden">Appointment Form</h3>
+            <button type="button" id="cancelAppointmentEditBtn" class="ghost-btn hidden">Cancel Edit</button>
+          </div>
+
+          <form id="appointmentForm" class="appointment-form-layout">
+            <input type="hidden" id="appointment_id" />
+
+            <div class="form-section">
+              <h4>Customer Info</h4>
+              <div class="form-grid">
+                <div>
+                  <label for="customer_name">Customer Name</label>
+                  <input type="text" id="customer_name" placeholder="Customer name" required />
+                </div>
+
+                <div>
+                  <label for="customer_phone">Phone Number</label>
+                  <input type="text" id="customer_phone" placeholder="(555) 123-4567" required />
+                </div>
+
+                <div>
+                  <label for="customer_type">Customer Type</label>
+                  <select id="customer_type">
+                    <option value="new">New</option>
+                    <option value="returning">Returning</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-section">
+              <h4>Appointment Details</h4>
+              <div class="form-section">
+                <div class="appointment-service-layout">
+                  <div class="appointment-services-box">
+                    <label>Services</label>
+
+                    <div id="appointment_services" class="specialty-checkbox-list">
+                      <label class="checkbox-item" data-value="manicure">
+                        <input type="checkbox" value="manicure" />
+                        <span>Manicure</span>
+                      </label>
+
+                      <label class="checkbox-item" data-value="pedicure">
+                        <input type="checkbox" value="pedicure" />
+                        <span>Pedicure</span>
+                      </label>
+
+                      <label class="checkbox-item" data-value="acrylic">
+                        <input type="checkbox" value="acrylic" />
+                        <span>Acrylic</span>
+                      </label>
+
+                      <label class="checkbox-item" data-value="gel x">
+                        <input type="checkbox" value="gel x" />
+                        <span>Gel X</span>
+                      </label>
+
+                      <label class="checkbox-item" data-value="hard gel">
+                        <input type="checkbox" value="hard gel" />
+                        <span>Hard Gel</span>
+                      </label>
+
+                      <label class="checkbox-item" data-value="builder gel">
+                        <input type="checkbox" value="builder gel" />
+                        <span>Builder Gel</span>
+                      </label>
+
+                      <label class="checkbox-item" data-value="dipping">
+                        <input type="checkbox" value="dipping" />
+                        <span>Dipping</span>
+                      </label>
+
+                      <label class="checkbox-item" data-value="waxing">
+                        <input type="checkbox" value="waxing" />
+                        <span>Waxing</span>
+                      </label>
+
+                      <label class="checkbox-item" data-value="facial">
+                        <input type="checkbox" value="facial" />
+                        <span>Facial</span>
+                      </label>
+
+                      <label class="checkbox-item" data-value="nail art">
+                        <input type="checkbox" value="nail art" />
+                        <span>Nail Art</span>
+                      </label>
+
+                      <label class="checkbox-item" data-value="removal">
+                        <input type="checkbox" value="removal" />
+                        <span>Removal</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="appointment-details-row">
+                  <div>
+                    <label for="appointment_people_count">Number of People</label>
+                    <input type="number" id="appointment_people_count" min="1" value="1" />
+                  </div>
+
+                  <div>
+                    <label for="appointment_time">Appointment Date & Time</label>
+                    <input type="datetime-local" id="appointment_time" required />
+                  </div>
+
+                  <div>
+                    <label for="appointment_technician">Assigned Technician</label>
+                    <select id="appointment_technician">
+                      <option value="">Select technician</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label for="preferred_technician_id">Preferred Technician</label>
+                    <select id="preferred_technician_id">
+                      <option value="">Select preferred technician</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="form-section">
+                <h4>Notes</h4>
+                <div class="form-grid form-grid-1">
+                  <div>
+                    <label for="special_requests">Special Requests</label>
+                    <textarea id="special_requests" rows="3" placeholder="Special requests"></textarea>
+                  </div>
+
+                  <div>
+                    <label for="allergies">Allergies / Sensitivities</label>
+                    <textarea id="allergies" rows="3" placeholder="Allergies or sensitivities"></textarea>
+                  </div>
+
+                  <div>
+                    <label for="appointment_note">Note</label>
+                    <textarea id="appointment_note" rows="4" placeholder="Extra appointment note"></textarea>
+                  </div>
+                </div>
+              </div>
+
+              <div class="form-actions">
+                <button type="submit" class="primary-btn" id="saveAppointmentBtn">Save Appointment</button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Cute notification -->
+  <div id="cuteNotification" class="cute-notification hidden">
+    <div class="cute-notification-card">
+      <div class="cute-notification-icon">♡</div>
+      <h4 id="cuteNotificationTitle">Success</h4>
+      <p id="cuteNotificationMessage">Saved successfully.</p>
+      <button type="button" id="cuteNotificationBtn" class="cute-notification-btn">OK</button>
+    </div>
+  </div>
+
+  <!-- Cute confirm -->
+  <div id="cuteConfirm" class="cute-notification hidden">
+    <div class="cute-notification-card">
+      <div class="cute-notification-icon">♡</div>
+      <h4 id="cuteConfirmTitle">Please Confirm</h4>
+      <p id="cuteConfirmMessage">Are you sure?</p>
+      <div class="cute-confirm-actions">
+        <button type="button" id="cuteConfirmCancel" class="cute-notification-btn cute-btn-light">Cancel</button>
+        <button type="button" id="cuteConfirmOk" class="cute-notification-btn">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Appointment details modal -->
+  <div id="appointmentModal" class="cute-notification hidden">
+    <div class="cute-notification-card appointment-modal-card">
+      <div class="cute-notification-icon">✦</div>
+      <h4>Appointment Details</h4>
+      <div id="appointmentModalContent" class="appointment-modal-content"></div>
+      <div class="appointment-modal-actions">
+        <button type="button" id="appointmentEditBtn" class="cute-notification-btn cute-btn-light">Edit</button>
+        <button type="button" id="appointmentDeleteBtn" class="cute-notification-btn danger-btn">Delete</button>
+        <button type="button" id="appointmentCloseBtn" class="cute-notification-btn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="preferredTechModal" class="cute-notification hidden">
+    <div class="cute-notification-card appointment-modal-card">
+      <div class="cute-notification-icon">✦</div>
+      <h4>Select Preferred Technician</h4>
+      <p id="preferredTechCustomerText">Choose a technician for this customer.</p>
+
+      <div class="appointment-modal-content">
+        <select id="preferredTechSelect">
+          <option value="">Select technician</option>
+        </select>
+      </div>
+
+      <div class="appointment-modal-actions">
+        <button type="button" id="preferredTechCancelBtn" class="cute-notification-btn cute-btn-light">Cancel</button>
+        <button type="button" id="preferredTechConfirmBtn" class="cute-notification-btn">Assign</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
