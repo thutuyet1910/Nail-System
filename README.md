@@ -116,9 +116,12 @@ nail-system/
         venv\Scripts\Activate.ps1
         venv\Scripts\activate
     Install dependencies:
+        python -m pip install --upgrade pip
         pip install -r requirements.txt
     Run the backend:
         uvicorn app.main:app --reload
+    Test main:
+        python -m pytest app/test_main.py -v
 Backend will run at:
       API: http://127.0.0.1:8000
       Docs: http://127.0.0.1:8000/docs
