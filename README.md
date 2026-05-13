@@ -111,7 +111,7 @@ nail-system/
 2. Backend setup
     Open a terminal and run:
         cd backend
-        python -m venv venv
+        py -m venv venv
     Activate the virtual environment:
         venv\Scripts\Activate.ps1
         venv\Scripts\activate
