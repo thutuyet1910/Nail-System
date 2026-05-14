@@ -17,7 +17,7 @@ Open a terminal in the `backend` folder and run:
 
 ```bash
 python -m venv venv
-venv\Scripts\Activate.ps1
+venv\Scripts\activate
 python.exe -m pip install --upgrade pip
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8001
