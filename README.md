@@ -126,7 +126,7 @@ Backend will run at:
       API: http://127.0.0.1:8000
       Docs: http://127.0.0.1:8000/docs
 3. Frontend setup
-    Open frontend/index.html directly in the browser, or use the VS Code Live Server extension.
+    Open start ../frontend/index.html directly in the browser, or use the VS Code Live Server extension.
 
 ## Future Improvements
     - Update the overall design of the check-in system
