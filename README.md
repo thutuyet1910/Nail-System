@@ -16,7 +16,7 @@ Open the whole `nail_salon_fullstack` folder in VS Code so the `frontend` and `b
 Open a terminal in the `backend` folder and run:
 
 ```bash
-python -m venv venv
+py -m venv venv
 venv\Scripts\activate
 python.exe -m pip install --upgrade pip
 pip install -r requirements.txt
