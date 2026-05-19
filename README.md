@@ -48,14 +48,16 @@ Nail-System-complete/
 Open a terminal in:
 
 ```text
-C:\Users\Flying Phoenix PCs\source\repos\Nail-System-complete\Nail-System-complete\backend
+cd backend
 ```
 
 Then run:
 
 ```powershell
-venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+py -m venv venv
+venv\Scripts\Activate
+python.exe -m pip install --upgrade pip
+pip install -r requirements.txt
 python -m uvicorn main:app --reload --port 8001
 ```
 
@@ -69,7 +71,7 @@ Backend URLs:
 Open:
 
 ```text
-frontend\index.html
+start ../frontend\index.html
 ```
 
 You can open it directly in a browser or use VS Code Live Server.
@@ -79,7 +81,6 @@ You can open it directly in a browser or use VS Code Live Server.
 Open a terminal in the owner backend folder and run:
 
 ```powershell
-venv\Scripts\Activate.ps1
 python -m pytest Test-main.py -q
 ```
 
