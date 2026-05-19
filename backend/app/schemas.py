@@ -121,6 +121,9 @@ class TodayCheckInItem(BaseModel):
     full_name: str
     phone_number: str
     checked_in_at: datetime
+    discount_type: Optional[str] = None
+    discount_value: float = 0
+    discount_label: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

@@ -1,135 +1,131 @@
-# Nail Check-In System
+# Nail Salon Customer Check-In System
 
-A modern nail salon **customer check-in system** designed to support both **new** and **returning** customer flows, service selection, referral rewards, birthday rewards, and live same-day queue tracking.
+Customer-facing check-in system for a nail salon. Customers enter their phone number, create or update their profile, select services, receive eligible rewards, and join the same-day live check-in queue.
 
-This project is part of a larger salon management system and is intended to connect later with:
-- technician assignment
-- appointments
-- checkout
-- discounts
-- revenue reporting
+This system is designed to work with the owner dashboard in `Nail-System-complete`.
 
----
+## What This System Does
 
-## Overview
+- Phone-first customer lookup
+- New customer registration
+- Returning customer check-in
+- Customer profile update
+- Service selection before check-in
+- Birthday discount support
+- Referral code and referral discount support
+- Loyalty visit reward support
+- Live same-day queue with latest customers shown last
+- Promotion area with disclaimer text
+- Discount data passed to the owner dashboard checkout flow
 
-The Nail Check-In System helps a salon manage the front-desk check-in experience by allowing customers to:
-- check in using their phone number
-- create a new customer profile if they are new
-- continue as a returning customer if already in the system
-- select services before final confirmation
-- receive birthday and referral rewards when eligible
-- join the live check-in queue for the day
+## Related System
 
----
+Run this check-in backend together with the owner dashboard backend for the full salon flow:
 
-## Current Features
+- Check-in backend: `http://127.0.0.1:8000`
+- Owner backend: `http://127.0.0.1:8001`
 
-### Customer Identification
-- Phone-first check-in flow
-- Detects whether the customer is:
-  - **new**
-  - **returning**
-- Prevents duplicate same-day check-ins
-
-### New Customer Flow
-- Collects:
-  - phone number
-  - full name
-  - email (optional)
-  - date of birth
-  - referral code (optional)
-- Lets customer select one or more services
-- Shows a review screen before final confirmation
-- Saves the new customer into the database
-- Checks the customer into today’s queue
-
-### Returning Customer Flow
-- Looks up customer by phone number
-- Displays customer profile
-- Allows profile updates
-- Lets returning customer select services
-- Shows a review screen before final confirmation
-- Checks the customer into today’s queue
-
-### Rewards & Promotions
-- Birthday reward support
-- Referral code support
-- Referral discount application
-- Success modal and birthday modal for reward messages
-- Referral code unlock flow
-
-### Services
-- Loads services from backend
-- Searchable service list
-- Multi-service selection
-- Review selected services before final check-in
-
-### Live Queue
-- Displays today’s check-in order
-- Shows queue position
-- Shows check-in time
-- Auto-refreshes the queue
-
----
-
-## Tech Stack
-
-### Backend
-- FastAPI
-- SQLAlchemy
-- SQLite
-
-### Frontend
-- HTML
-- CSS
-- JavaScript
-
----
+The owner dashboard reads this system's `/today-checkins` endpoint to auto-assign customers.
 
 ## Project Structure
 
 ```text
-nail-system/
-├── backend/
-│   ├── app/
-│   │   ├── __init__.py
-│   │   ├── main.py
-│   │   ├── database.py
-│   │   ├── models.py
-│   │   └── schemas.py
-│   └── requirements.txt
-├── frontend/
-│   ├── index.html
-│   ├── style.css
-│   └── script.js
-├── .gitignore
-└── README.md
+Nail-System-main/
+  backend/
+    app/
+      __init__.py
+      main.py
+      database.py
+      models.py
+      schemas.py
+      scheduler.py
+      email_utils.py
+      test_main.py
+    requirements.txt
+  frontend/
+    index.html
+    script.js
+    style.css
+  README.md
+```
 
-## How to Run
-1. Open the project
-2. Backend setup
-    Open a terminal and run:
-        cd backend
-        py -m venv venv
-    Activate the virtual environment:
-        venv\Scripts\Activate.ps1
-        venv\Scripts\activate
-    Install dependencies:
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-    Run the backend:
-        uvicorn app.main:app --reload
-    Test main:
-        python -m pytest app/test_main.py -v
-Backend will run at:
-      API: http://127.0.0.1:8000
-      Docs: http://127.0.0.1:8000/docs
-3. Frontend setup
-    Open start ../frontend/index.html directly in the browser, or use the VS Code Live Server extension.
+## Run The Backend
 
-## Future Improvements
-    - Update the overall design of the check-in system
-    - In the future, reminder logic should be updated to use phone numbers instead, since email is optional
-    
-   
+Open a terminal in:
+
+```text
+C:\Users\Flying Phoenix PCs\source\repos\Nail-System-main\Nail-System-main\backend
+```
+
+Then run:
+
+```powershell
+venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m uvicorn app.main:app --reload --port 8000
+```
+
+Backend URLs:
+
+- API root: `http://127.0.0.1:8000`
+- Docs: `http://127.0.0.1:8000/docs`
+
+## Run The Frontend
+
+Open:
+
+```text
+frontend\index.html
+```
+
+You can open it directly in a browser or use VS Code Live Server.
+
+## Run Tests
+
+Open a terminal in the check-in backend folder and run:
+
+```powershell
+venv\Scripts\Activate.ps1
+python -m pytest app\test_main.py -q
+```
+
+Current expected result:
+
+```text
+84 passed
+```
+
+## Main Check-In Flow
+
+1. Customer enters phone number.
+2. System checks if the customer already exists.
+3. New customers create a profile.
+4. Returning customers can confirm or update profile information.
+5. Customer selects one or more services.
+6. System applies eligible birthday, referral, or loyalty discounts.
+7. Customer joins today's live queue.
+8. Owner dashboard can auto-assign the customer to a matching technician.
+
+## Main API Endpoints
+
+- `GET /`
+- `GET /services`
+- `POST /customers/new`
+- `GET /customers`
+- `GET /customers/{phone_number}`
+- `GET /customers/check-in-status/{phone_number}`
+- `POST /customers/check-in/{phone_number}`
+- `GET /today-checkins`
+- `POST /referrals/apply`
+- `PATCH /customers/{phone_number}/update-phone`
+- `PATCH /customers/{phone_number}/profile`
+- `GET /customers/{phone_number}/visits`
+- `GET /birthday-reminders`
+- `POST /birthday-reminders/send`
+
+## Notes
+
+- Date inputs use `MM-DD-YYYY` in the frontend.
+- Backend API dates are stored in ISO format.
+- The backend stores local SQLite data in `backend\nail_system.db`.
+- Test data uses `backend\test_checkin.db`.

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -54,6 +54,9 @@ class Visit(Base):
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
     visit_date = Column(Date, nullable=False)
     checked_in_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    discount_type = Column(String, nullable=True)
+    discount_value = Column(Float, nullable=True, default=0)
+    discount_label = Column(String, nullable=True)
 
     customer = relationship("Customer", back_populates="visits")
     visit_services = relationship("VisitService", back_populates="visit", cascade="all, delete-orphan")

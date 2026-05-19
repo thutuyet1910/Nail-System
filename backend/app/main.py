@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Body, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload
 
 from . import models, schemas
@@ -15,6 +16,23 @@ from .email_utils import send_birthday_email, send_referral_discount_email
 from .scheduler import scheduler
 
 Base.metadata.create_all(bind=engine)
+
+
+def ensure_visit_discount_columns() -> None:
+    with engine.begin() as conn:
+        existing_columns = {
+            row[1]
+            for row in conn.execute(text("PRAGMA table_info(visits)")).fetchall()
+        }
+        if "discount_type" not in existing_columns:
+            conn.execute(text("ALTER TABLE visits ADD COLUMN discount_type VARCHAR"))
+        if "discount_value" not in existing_columns:
+            conn.execute(text("ALTER TABLE visits ADD COLUMN discount_value FLOAT DEFAULT 0"))
+        if "discount_label" not in existing_columns:
+            conn.execute(text("ALTER TABLE visits ADD COLUMN discount_label VARCHAR"))
+
+
+ensure_visit_discount_columns()
 
 DEFAULT_SERVICES = [
     "Acrylic Full Set",
@@ -159,6 +177,72 @@ def _apply_visit_discount(customer, db: Session) -> bool:
     customer.visit_discount_pending = False
     db.add(customer)
     return True
+
+
+def _discount_from_applied(discounts_applied: list[dict]) -> dict:
+    fixed_total = 0
+    percent_total = 0
+    fixed_labels = []
+    percent_labels = []
+
+    for discount in discounts_applied:
+        description = discount.get("description") or ""
+        if "amount" in discount:
+            fixed_total += float(discount.get("amount") or 0)
+            if description:
+                fixed_labels.append(description)
+        elif "percent" in discount:
+            percent_total += float(discount.get("percent") or 0)
+            if description:
+                percent_labels.append(description)
+
+    if fixed_total > 0:
+        return {
+            "discount_type": "fixed",
+            "discount_value": fixed_total,
+            "discount_label": " + ".join(fixed_labels) or f"${fixed_total:g} discount",
+        }
+
+    if percent_total > 0:
+        return {
+            "discount_type": "percent",
+            "discount_value": percent_total,
+            "discount_label": " + ".join(percent_labels) or f"{percent_total:g}% discount",
+        }
+
+    return {
+        "discount_type": None,
+        "discount_value": 0,
+        "discount_label": None,
+    }
+
+
+def _today_queue_discount(visit, customer) -> dict:
+    if visit.discount_type:
+        return {
+            "discount_type": visit.discount_type,
+            "discount_value": float(visit.discount_value or 0),
+            "discount_label": visit.discount_label,
+        }
+
+    current_month_key = date.today().strftime("%Y-%m")
+    if (
+        customer.date_of_birth
+        and is_exact_birthday(customer.date_of_birth)
+        and customer.birthday_discount_used_month == current_month_key
+    ):
+        amount = customer.birthday_discount_amount or 10
+        return {
+            "discount_type": "fixed",
+            "discount_value": amount,
+            "discount_label": f"${amount} birthday discount",
+        }
+
+    return {
+        "discount_type": None,
+        "discount_value": 0,
+        "discount_label": None,
+    }
 
 
 def run_scheduled_birthday_reminders():
@@ -369,6 +453,7 @@ def get_today_checkins(db: Session = Depends(get_db)):
 
     result = []
     for index, visit in enumerate(visits, start=1):
+        discount = _today_queue_discount(visit, visit.customer)
         result.append(
             {
                 "position": index,
@@ -376,6 +461,7 @@ def get_today_checkins(db: Session = Depends(get_db)):
                 "phone_number": visit.customer.phone_number,
                 "checked_in_at": visit.checked_in_at,
                 "services": [item.service.name for item in visit.visit_services],
+                **discount,
             }
         )
 
@@ -459,6 +545,11 @@ def check_in_customer(
                 "percent": 10,
             }
         )
+
+    visit_discount = _discount_from_applied(discounts_applied)
+    new_visit.discount_type = visit_discount["discount_type"]
+    new_visit.discount_value = visit_discount["discount_value"]
+    new_visit.discount_label = visit_discount["discount_label"]
 
     if customer.visit_count_cycle % 10 == 0:
         customer.visit_discount_pending = True
