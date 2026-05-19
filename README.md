@@ -2,7 +2,7 @@
 
 Customer-facing check-in system for a nail salon. Customers enter their phone number, create or update their profile, select services, receive eligible rewards, and join the same-day live check-in queue.
 
-This system is designed to work with the owner dashboard in `Nail-System-complete`.
+This system is designed to work with the owner dashboard in `Nail-System-owner-dashboard-update`.
 
 ## What This System Does
 
@@ -60,9 +60,11 @@ cd backend
 Then run:
 
 ```powershell
-venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python -m uvicorn app.main:app --reload --port 8000
+py -m venv venv
+venv\Scripts\Activate
+python.exe -m pip install --upgrade pip
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
 ```
 
 Backend URLs:
