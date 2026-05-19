@@ -1,3 +1,4 @@
+from datetime import date
 from typing import List, Optional
 
 from fastapi import FastAPI, Depends, HTTPException, Query
@@ -7,7 +8,7 @@ from sqlalchemy.orm import Session
 import crud
 import models
 import schemas
-from database import SessionLocal, engine
+from database import engine, get_db
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -20,15 +21,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
 
 @app.get("/")
 def root():
@@ -221,6 +213,26 @@ def delete_checkout(checkout_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Checkout not found")
     return {"message": "Checkout deleted"}
 
+
+# ----------------------------
+# Income Reports
+# ----------------------------
+@app.get("/income/tech", response_model=schemas.TechIncomeReport)
+def get_tech_income(
+    report_date: date = Query(alias="date"),
+    technician_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    return crud.get_tech_income_report(db, report_date, technician_id=technician_id)
+
+
+@app.get("/income/salon", response_model=schemas.SalonIncomeReport)
+def get_salon_income(
+    report_date: date = Query(alias="date"),
+    db: Session = Depends(get_db),
+):
+    return crud.get_salon_income_report(db, report_date)
+
 # ----------------------------
 # Technician Turns / Dispatch
 # ----------------------------
@@ -300,4 +312,3 @@ def update_turn_status(turn_id: int, payload: schemas.TurnStatusUpdate, db: Sess
     if not turn:
         raise HTTPException(status_code=404, detail="Turn not found")
     return turn
-

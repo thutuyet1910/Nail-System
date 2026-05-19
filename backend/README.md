@@ -1,98 +1,110 @@
-# Nail Salon Backend
+# Owner Dashboard Backend
 
-Basic FastAPI backend for:
-- technician turns
-- customer appointments
+FastAPI backend for the nail salon owner dashboard.
 
-## Files
-- `main.py`
-- `database.py`
-- `models.py`
-- `schemas.py`
-- `crud.py`
-- `requirements.txt`
+## Backend Responsibilities
 
-## Setup
+- Technicians and technician cards
+- Appointments and preferred technician booking
+- Calendar data
+- Dispatch turns and auto assignment
+- Checkout and checkout history
+- Inventory
+- Technician income reports
+- Nail salon income reports
 
-### 1. Open terminal in this folder
-### 2. Create virtual environment
-```bash
-python -m venv venv
+## Run Server
+
+Open this folder in a terminal:
+
+```text
+C:\Users\Flying Phoenix PCs\source\repos\Nail-System-complete\Nail-System-complete\backend
 ```
 
-### 3. Activate virtual environment
+Then run:
 
-#### Windows PowerShell
-```bash
+```powershell
 venv\Scripts\Activate.ps1
-```
-
-#### Windows CMD
-```bash
-venv\Scripts\activate
-```
-
-### 4. Install packages
-```bash
-pip install -r requirements.txt
-```
-
-### 5. Run server
-```bash
-uvicorn main:app --reload
+python -m pip install -r requirements.txt
+python -m uvicorn main:app --reload --port 8001
 ```
 
 Server:
-- API root: `http://127.0.0.1:8000`
-- Swagger docs: `http://127.0.0.1:8000/docs`
 
-## Main endpoints
+- API root: `http://127.0.0.1:8001`
+- Swagger docs: `http://127.0.0.1:8001/docs`
+
+## Run Tests
+
+```powershell
+venv\Scripts\Activate.ps1
+python -m pytest Test-main.py -q
+```
+
+Current expected result:
+
+```text
+101 passed
+```
+
+## Main Endpoints
 
 ### Technicians
+
 - `POST /technicians`
 - `GET /technicians`
+- `GET /technicians/cards`
 - `GET /technicians/{id}`
+- `PUT /technicians/{id}`
+- `DELETE /technicians/{id}`
 
 ### Appointments
+
 - `POST /appointments`
 - `GET /appointments`
 - `GET /appointments/{id}`
 - `PUT /appointments/{id}`
 - `DELETE /appointments/{id}`
 
-### Turns
+Preferred technician appointments are included when filtering by `technician_id` if no assigned technician is set.
+
+### Turns And Dispatch
+
 - `POST /turns`
 - `GET /turns`
 - `GET /turns/today`
 - `POST /turns/assign-next`
+- `POST /turns/assign-auto`
+- `POST /turns/assign-preferred`
+- `PUT /turns/{id}/reassign`
+- `PUT /turns/{id}/start`
+- `PUT /turns/{id}/complete`
 - `PUT /turns/{id}/status`
 
-## Example technician
-```json
-{
-  "full_name": "Jenny",
-  "skills": "Gel, Pedicure, Manicure",
-  "phone": "555-123-4567"
-}
-```
+### Checkout
 
-## Example appointment
-```json
-{
-  "customer_name": "Anna Tran",
-  "customer_phone": "555-987-6543",
-  "service_name": "Gel Manicure",
-  "appointment_time": "2026-04-07T10:00:00",
-  "note": "Prefers pink color",
-  "technician_id": 1
-}
-```
+- `POST /checkouts`
+- `GET /checkouts`
+- `GET /checkouts/{id}`
+- `DELETE /checkouts/{id}`
 
-## Example turn
-```json
-{
-  "customer_name": "Linda Pham",
-  "service_name": "Pedicure",
-  "technician_id": 1
-}
-```
+Creating a checkout with a `turn_id` marks that turn as `done`.
+
+### Inventory
+
+- `POST /inventory`
+- `GET /inventory`
+- `GET /inventory/summary`
+- `GET /inventory/{id}`
+- `PUT /inventory/{id}`
+- `DELETE /inventory/{id}`
+
+### Income
+
+- `GET /income/tech`
+- `GET /income/salon`
+
+## Local Data
+
+- App database: `nail_system.db`
+- Test database: `test_owner.db`

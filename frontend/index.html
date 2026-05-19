@@ -26,6 +26,8 @@
         <button id="navAppointment" class="menu-item">Make Appointment</button>
         <button id="navInventory" class="menu-item">Inventory</button>
         <button id="navCheckout" class="menu-item">Checkout</button>
+        <button id="navTechIncome" class="menu-item">Technician Income</button>
+        <button id="navSalonIncome" class="menu-item">Nail Salon Income</button>
       </nav>
 
       <div class="menu-footer">
@@ -73,7 +75,10 @@
           <button class="back-btn">← Back</button>
         </header>
 
-        <div class="form-card">
+        <div class="form-card queue-section-card">
+          <div class="section-header">
+            <h3>Live Check-In Queue</h3>
+          </div>
           <div id="liveCheckinQueue" class="tech-cards"></div>
 
           <div class="live-queue-footer">
@@ -81,6 +86,37 @@
               Auto Assign
             </button>
           </div>
+        </div>
+
+        <div class="form-card history-section-card">
+          <div class="section-header">
+            <h3 class="assigned-section-title">Salon History - Checked-Out Today</h3>
+            <button type="button" id="checkoutHistoryAllBtn" class="ghost-btn">Check-Out History</button>
+          </div>
+          <div class="history-range-card">
+            <div class="toolbar-filters income-filters income-range-filters">
+              <div>
+                <label for="saleHistoryRangeType">History Range</label>
+                <select id="saleHistoryRangeType">
+                  <option value="date">Date</option>
+                  <option value="week">Week</option>
+                  <option value="year">Year</option>
+                </select>
+              </div>
+              <div>
+                <label for="saleHistoryRangeStart">Start</label>
+                <input type="text" id="saleHistoryRangeStart" placeholder="MM-DD-YYYY" inputmode="numeric" maxlength="10" pattern="\d{2}-\d{2}-\d{4}" data-date-mask="true" />
+              </div>
+              <div>
+                <label for="saleHistoryRangeEnd">End</label>
+                <input type="text" id="saleHistoryRangeEnd" placeholder="MM-DD-YYYY" inputmode="numeric" maxlength="10" pattern="\d{2}-\d{2}-\d{4}" data-date-mask="true" />
+              </div>
+              <div class="income-action-cell">
+                <button type="button" id="loadSaleHistoryRangeBtn" class="primary-btn">Review Range</button>
+              </div>
+            </div>
+          </div>
+          <div id="checkoutHistoryList" class="tech-cards"></div>
         </div>
       </section>
 
@@ -169,7 +205,7 @@
 
                 <div>
                   <label for="inventory_purchase_date">Purchase Date</label>
-                  <input type="date" id="inventory_purchase_date" />
+                  <input type="text" id="inventory_purchase_date" placeholder="MM-DD-YYYY" inputmode="numeric" maxlength="10" pattern="\d{2}-\d{2}-\d{4}" data-date-mask="true" />
                 </div>
               </div>
             </div>
@@ -312,15 +348,17 @@
 
                 <div>
                   <label for="checkout_discount_paid_by">Discount Paid By</label>
-                  <select id="checkout_discount_paid_by">
-                    <option value="owner">Owner</option>
-                    <option value="technician">Technician</option>
-                  </select>
+                  <div id="checkout_discount_paid_by" class="readonly-info-line" data-value="owner">Owner</div>
                 </div>
 
                 <div>
                   <label for="checkout_tip">Tip</label>
                   <input type="number" id="checkout_tip" min="0" step="0.01" value="0" />
+                </div>
+
+                <div>
+                  <label>Applied Discount</label>
+                  <div id="checkoutDiscountDisplay" class="readonly-info-line">No discount applied</div>
                 </div>
               </div>
             </div>
@@ -339,43 +377,8 @@
                 </div>
 
                 <div class="summary-card">
-                  <span class="summary-label">Net Service</span>
-                  <strong id="checkoutNet">$0.00</strong>
-                </div>
-
-                <div class="summary-card">
-                  <span class="summary-label">Technician 60%</span>
-                  <strong id="checkoutTechShare">$0.00</strong>
-                </div>
-
-                <div class="summary-card">
-                  <span class="summary-label">Salon 40%</span>
-                  <strong id="checkoutSalonShare">$0.00</strong>
-                </div>
-
-                <div class="summary-card">
-                  <span class="summary-label">Salon Actual Revenue</span>
-                  <strong id="checkoutSalonActual">$0.00</strong>
-                </div>
-
-                <div class="summary-card">
-                  <span class="summary-label">Technician Total</span>
-                  <strong id="checkoutTechTotal">$0.00</strong>
-                </div>
-
-                <div class="summary-card">
-                  <span class="summary-label">Customer Pays</span>
-                  <strong id="checkoutCustomerPays">$0.00</strong>
-                </div>
-              </div>
-            </div>
-
-            <div class="form-section">
-              <h4>Notes</h4>
-              <div class="form-grid form-grid-1">
-                <div>
-                  <label for="checkout_note">Note</label>
-                  <textarea id="checkout_note" rows="4" placeholder="Optional checkout note"></textarea>
+                  <span class="summary-label">Tip</span>
+                  <strong id="checkoutTipSummary">$0.00</strong>
                 </div>
               </div>
             </div>
@@ -385,6 +388,114 @@
             </div>
           </form>
         </div>
+      </section>
+
+      <!-- TECH INCOME VIEW -->
+      <section id="techIncomeView" class="view">
+        <header class="topbar">
+          <div>
+            <h2>Technician Income</h2>
+            <p class="subtitle">Review 60% income, tips, turns, and turn details</p>
+          </div>
+          <button class="back-btn">Back</button>
+        </header>
+
+        <div class="form-card">
+          <div class="toolbar-filters income-filters">
+            <div>
+              <label for="techIncomeDate">Date</label>
+              <input type="text" id="techIncomeDate" placeholder="MM-DD-YYYY" inputmode="numeric" maxlength="10" pattern="\d{2}-\d{2}-\d{4}" data-date-mask="true" />
+            </div>
+            <div>
+              <label for="techIncomeTechnician">Technician</label>
+              <select id="techIncomeTechnician">
+                <option value="">All technicians</option>
+              </select>
+            </div>
+            <div class="income-action-cell">
+              <button type="button" id="loadTechIncomeBtn" class="primary-btn">Review</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-card income-range-card">
+          <div class="section-header">
+            <h3>Range Review</h3>
+          </div>
+          <div class="toolbar-filters income-filters income-range-filters">
+            <div>
+              <label for="techIncomeRangeType">Range Type</label>
+              <select id="techIncomeRangeType">
+                <option value="date">Date</option>
+                <option value="week">Week</option>
+                <option value="year">Year</option>
+              </select>
+            </div>
+            <div>
+              <label for="techIncomeRangeStart">Start</label>
+              <input type="text" id="techIncomeRangeStart" placeholder="MM-DD-YYYY" inputmode="numeric" maxlength="10" pattern="\d{2}-\d{2}-\d{4}" data-date-mask="true" />
+            </div>
+            <div>
+              <label for="techIncomeRangeEnd">End</label>
+              <input type="text" id="techIncomeRangeEnd" placeholder="MM-DD-YYYY" inputmode="numeric" maxlength="10" pattern="\d{2}-\d{2}-\d{4}" data-date-mask="true" />
+            </div>
+            <div class="income-action-cell">
+              <button type="button" id="loadTechIncomeRangeBtn" class="primary-btn">Review Range</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="techIncomeRangeContent" class="income-content"></div>
+
+        <div id="techIncomeContent" class="income-content"></div>
+      </section>
+
+      <!-- NAIL SALON INCOME VIEW -->
+      <section id="salonIncomeView" class="view">
+        <header class="topbar">
+          <div>
+            <h2>Nail Salon Income</h2>
+            <p class="subtitle">Review income before discount, after discount, and after tech pay</p>
+          </div>
+          <button class="back-btn">Back</button>
+        </header>
+
+        <div class="form-card">
+          <div class="toolbar-filters income-filters">
+            <div>
+              <label for="salonIncomeDate">Date</label>
+              <input type="text" id="salonIncomeDate" placeholder="MM-DD-YYYY" inputmode="numeric" maxlength="10" pattern="\d{2}-\d{2}-\d{4}" data-date-mask="true" />
+            </div>
+            <div class="income-action-cell">
+              <button type="button" id="loadSalonIncomeBtn" class="primary-btn">Review</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="inventory-summary-grid income-summary-grid">
+          <div class="summary-card">
+            <span class="summary-label">Date Income Before Discount</span>
+            <strong id="salonDayBeforeDiscount">$0.00</strong>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">Date Discount</span>
+            <strong id="salonDayDiscount">$0.00</strong>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">Date Income After Tech Pay</span>
+            <strong id="salonDayAfterTech">$0.00</strong>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">Week Income After Tech Pay</span>
+            <strong id="salonWeekAfterTech">$0.00</strong>
+          </div>
+          <div class="summary-card">
+            <span class="summary-label">Year Income After Tech Pay</span>
+            <strong id="salonYearAfterTech">$0.00</strong>
+          </div>
+        </div>
+
+        <div id="salonIncomeContent" class="income-content"></div>
       </section>
 
       <!-- TECHNICIAN VIEW -->
@@ -421,7 +532,7 @@
 
                 <div>
                   <label for="tech_start_date">Start Date</label>
-                  <input type="date" id="tech_start_date" min="2000-01-01" max="2100-12-31" />
+                  <input type="text" id="tech_start_date" placeholder="MM-DD-YYYY" inputmode="numeric" maxlength="10" pattern="\d{2}-\d{2}-\d{4}" data-date-mask="true" />
                 </div>
               </div>
 
@@ -430,57 +541,53 @@
                   <label>Specialties</label>
 
                   <div id="tech_specialties" class="specialty-checkbox-list">
-                    <label class="checkbox-item" data-value="manicure / pedicure (gel)">
-                      <input type="checkbox" value="manicure / pedicure (gel)" />
-                      <span>Manicure / Pedicure (Gel)</span>
+                    <label class="checkbox-item" data-value="manicure / pedicure">
+                      <input type="checkbox" value="Manicure / Pedicure" />
+                      <span>Manicure / Pedicure</span>
                     </label>
 
                     <label class="checkbox-item" data-value="acrylic">
-                      <input type="checkbox" value="acrylic" />
+                      <input type="checkbox" value="Acrylic" />
                       <span>Acrylic</span>
                     </label>
 
-                    <label class="checkbox-item" data-value="dipping">
-                      <input type="checkbox" value="dipping" />
-                      <span>Dipping</span>
+                    <label class="checkbox-item" data-value="gel">
+                      <input type="checkbox" value="Gel" />
+                      <span>Gel</span>
                     </label>
 
-                    <label class="checkbox-item" data-value="acrylic (nail art)">
-                      <input type="checkbox" value="acrylic (nail art)" />
-                      <span>Acrylic (Nail Art)</span>
+                    <label class="checkbox-item" data-value="dip powder">
+                      <input type="checkbox" value="Dip Powder" />
+                      <span>Dip Powder</span>
                     </label>
 
-                    <label class="checkbox-item" data-value="hard gel">
-                      <input type="checkbox" value="hard gel" />
-                      <span>Hard Gel</span>
+                    <label class="checkbox-item" data-value="builder / hard gel">
+                      <input type="checkbox" value="Builder / Hard Gel" />
+                      <span>Builder / Hard Gel</span>
                     </label>
 
-                    <label class="checkbox-item" data-value="builder gel">
-                      <input type="checkbox" value="builder gel" />
-                      <span>Builder Gel</span>
+                    <label class="checkbox-item" data-value="nail art">
+                      <input type="checkbox" value="Nail Art" />
+                      <span>Nail Art</span>
                     </label>
 
-                    <label class="checkbox-item" data-value="gel x">
-                      <input type="checkbox" value="gel x" />
-                      <span>Gel X</span>
+                    <label class="checkbox-item" data-value="nail repair / removal">
+                      <input type="checkbox" value="Nail Repair / Removal" />
+                      <span>Nail Repair / Removal</span>
                     </label>
 
                     <label class="checkbox-item" data-value="waxing">
-                      <input type="checkbox" value="waxing" />
+                      <input type="checkbox" value="Waxing" />
                       <span>Waxing</span>
-                    </label>
-
-                    <label class="checkbox-item" data-value="facial">
-                      <input type="checkbox" value="facial" />
-                      <span>Facial</span>
                     </label>
                   </div>
                 </div>
 
                 <div class="work-info-add-side">
                   <div class="specialty-actions specialty-actions-vertical">
-                    <input type="text" id="new_specialty_input" placeholder="Add new service" />
+                    <input type="text" id="new_specialty_input" placeholder="Add new service group" />
                     <button type="button" id="addSpecialtyBtn" class="mini-btn">Add</button>
+                    <button type="button" id="deleteSpecialtyBtn" class="mini-btn danger-mini-btn">Delete Checked</button>
                   </div>
                 </div>
               </div>
@@ -496,23 +603,22 @@
                 </div>
 
                 <div>
-                  <label for="tech_availability">Availability</label>
-                  <select id="tech_availability">
-                    <option value="off today">Off Today</option>
-                    <option value="available today">Available Today</option>
-                    <option value="on break">On Break</option>
-                    <option value="busy">Busy</option>
-                  </select>
+                  <label for="tech_date_off_start">Date Off Start</label>
+                  <input type="text" id="tech_date_off_start" placeholder="MM-DD-YYYY" inputmode="numeric" maxlength="10" pattern="\d{2}-\d{2}-\d{4}" data-date-mask="true" />
                 </div>
 
                 <div>
-                  <label for="tech_schedule">Work Schedule</label>
-                  <input type="text" id="tech_schedule" placeholder="Mon-Fri 9:00 AM - 5:00 PM" />
+                  <label for="tech_date_off_end">Date Off End</label>
+                  <input type="text" id="tech_date_off_end" placeholder="MM-DD-YYYY" inputmode="numeric" maxlength="10" pattern="\d{2}-\d{2}-\d{4}" data-date-mask="true" />
                 </div>
 
-                <div>
-                  <label for="tech_skills">Skills</label>
-                  <input type="text" id="tech_skills" placeholder="Detailed skill notes" />
+                <div class="work-schedule-field">
+                  <label for="tech_schedule">Available Days</label>
+                  <!-- Hidden input stores the JSON schedule value -->
+                  <input type="hidden" id="tech_schedule" name="work_schedule" />
+
+                  <!-- Visual controls - JS fills this in -->
+                  <div id="techScheduleBoard"></div>
                 </div>
               </div>
             </div>
@@ -530,15 +636,14 @@
     <input type="text" id="techSearch" placeholder="Search by name" />
     <select id="techFilterSpecialty">
       <option value="">All Specialties</option>
-      <option value="manicure / pedicure (gel)">Manicure / Pedicure (Gel)</option>
-      <option value="acrylic">Acrylic</option>
-      <option value="dipping">Dipping</option>
-      <option value="acrylic (nail art)">Acrylic (Nail Art)</option>
-      <option value="hard gel">Hard Gel</option>
-      <option value="builder gel">Builder Gel</option>
-      <option value="gel x">Gel X</option>
-      <option value="waxing">Waxing</option>
-      <option value="facial">Facial</option>
+      <option value="Manicure / Pedicure">Manicure / Pedicure</option>
+      <option value="Acrylic">Acrylic</option>
+      <option value="Gel">Gel</option>
+      <option value="Dip Powder">Dip Powder</option>
+      <option value="Builder / Hard Gel">Builder / Hard Gel</option>
+      <option value="Nail Art">Nail Art</option>
+      <option value="Nail Repair / Removal">Nail Repair / Removal</option>
+      <option value="Waxing">Waxing</option>
     </select>
     <select id="techFilterStatus">
       <option value="">All Status</option>
@@ -585,13 +690,6 @@
                   <input type="text" id="customer_phone" placeholder="(555) 123-4567" required />
                 </div>
 
-                <div>
-                  <label for="customer_type">Customer Type</label>
-                  <select id="customer_type">
-                    <option value="new">New</option>
-                    <option value="returning">Returning</option>
-                  </select>
-                </div>
               </div>
             </div>
 
@@ -669,14 +767,7 @@
 
                   <div>
                     <label for="appointment_time">Appointment Date & Time</label>
-                    <input type="datetime-local" id="appointment_time" required />
-                  </div>
-
-                  <div>
-                    <label for="appointment_technician">Assigned Technician</label>
-                    <select id="appointment_technician">
-                      <option value="">Select technician</option>
-                    </select>
+                  <input type="text" id="appointment_time" placeholder="MM-DD-YYYY HH:MM" inputmode="numeric" maxlength="16" pattern="\d{2}-\d{2}-\d{4} \d{2}:\d{2}" data-datetime-mask="true" required />
                   </div>
 
                   <div>
@@ -701,10 +792,6 @@
                     <textarea id="allergies" rows="3" placeholder="Allergies or sensitivities"></textarea>
                   </div>
 
-                  <div>
-                    <label for="appointment_note">Note</label>
-                    <textarea id="appointment_note" rows="4" placeholder="Extra appointment note"></textarea>
-                  </div>
                 </div>
               </div>
 

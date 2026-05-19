@@ -1,7 +1,7 @@
 from datetime import datetime, date
 from typing import Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 # ----------------------------
@@ -41,9 +41,11 @@ class TechnicianBase(BaseModel):
     @field_validator("availability")
     @classmethod
     def validate_availability(cls, v):
+        if v and v.lower().startswith("date off:"):
+            return v
         allowed = {"available today", "on break", "busy", "off today"}
         if v not in allowed:
-            raise ValueError("Availability must be one of: available today, on break, busy, off today")
+            raise ValueError("Availability must be one of: available today, on break, busy, off today, or date off range")
         return v
 
 
@@ -68,16 +70,14 @@ class TechnicianUpdate(BaseModel):
 class TechnicianOut(TechnicianBase):
     id: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TechnicianCardOut(TechnicianOut):
     today_appointments_count: int
     today_turns_count: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ----------------------------
@@ -138,8 +138,7 @@ class AppointmentOut(AppointmentBase):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ----------------------------
@@ -306,8 +305,7 @@ class TurnOut(BaseModel):
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ----------------------------
@@ -369,9 +367,8 @@ class CheckoutBase(BaseModel):
     @field_validator("discount_paid_by")
     @classmethod
     def validate_discount_paid_by(cls, v):
-        allowed = {"owner", "technician"}
-        if v not in allowed:
-            raise ValueError("Discount paid by must be one of: owner, technician")
+        if v != "owner":
+            raise ValueError("Discount paid by must be owner")
         return v
 
 
@@ -383,10 +380,74 @@ class CheckoutOut(CheckoutBase):
     id: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
-        # ----------------------------
+
+# ----------------------------
+# Income Report Schemas
+# ----------------------------
+class IncomeTurnDetail(BaseModel):
+    checkout_id: int
+    turn_id: Optional[int] = None
+    turn_number: Optional[int] = None
+    customer_name: str
+    customer_phone: Optional[str] = None
+    technician_id: Optional[int] = None
+    technician_name: Optional[str] = None
+    service_name: str
+    payment_method: str
+    gross_before_discount: float
+    discount_amount: float
+    net_after_discount: float
+    tech_60_percent: float
+    tip_amount: float
+    tech_total: float
+    salon_income_after_tech: float
+    customer_pays: float
+    created_at: datetime
+    note: Optional[str] = None
+
+
+class TechIncomeSummary(BaseModel):
+    technician_id: Optional[int] = None
+    technician_name: str
+    date: date
+    gross_before_60: float
+    tech_after_60: float
+    tip_total: float
+    tech_total: float
+    turns: int
+    details: list[IncomeTurnDetail]
+
+
+class SalonIncomePeriodSummary(BaseModel):
+    period: str
+    start_date: date
+    end_date: date
+    income_before_discount: float
+    total_discount: float
+    income_after_discount: float
+    tech_60_percent_total: float
+    tech_tip_total: float
+    total_paid_to_techs: float
+    salon_income_after_techs: float
+    turns: int
+
+
+class TechIncomeReport(BaseModel):
+    date: date
+    technicians: list[TechIncomeSummary]
+
+
+class SalonIncomeReport(BaseModel):
+    date: date
+    day: SalonIncomePeriodSummary
+    week: SalonIncomePeriodSummary
+    year: SalonIncomePeriodSummary
+    details: list[IncomeTurnDetail]
+
+
+# ----------------------------
 # Inventory Schemas
 # ----------------------------
 class InventoryItemBase(BaseModel):
@@ -418,5 +479,4 @@ class InventoryItemOut(InventoryItemBase):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

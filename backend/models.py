@@ -70,8 +70,8 @@ class Appointment(Base):
 
     people_count = Column(Integer, nullable=False, default=1)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
 
     technician_id = Column(Integer, ForeignKey("technicians.id"), nullable=True)
     preferred_technician_id = Column(Integer, ForeignKey("technicians.id"), nullable=True)
@@ -108,7 +108,7 @@ class Turn(Base):
     assigned_by = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
     assigned_at = Column(DateTime, nullable=True)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
@@ -159,7 +159,7 @@ class Checkout(Base):
 
     note = Column(Text, nullable=True)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
 
 
 class InventoryItem(Base):
@@ -174,5 +174,5 @@ class InventoryItem(Base):
     purchase_date = Column(Date, nullable=True)
     low_stock_level = Column(Integer, nullable=False, default=3)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)

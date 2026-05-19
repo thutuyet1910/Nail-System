@@ -1,5 +1,5 @@
-from datetime import datetime, date, time
-from sqlalchemy import func
+from datetime import datetime, date, time, timedelta
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 import models
@@ -154,7 +154,13 @@ def get_technician_cards(
         today_appointments_count = (
             db.query(func.count(models.Appointment.id))
             .filter(
-                models.Appointment.technician_id == tech.id,
+                or_(
+                    models.Appointment.technician_id == tech.id,
+                    (
+                        models.Appointment.technician_id.is_(None)
+                        & (models.Appointment.preferred_technician_id == tech.id)
+                    ),
+                ),
                 models.Appointment.appointment_time >= start_dt,
                 models.Appointment.appointment_time <= end_dt,
             )
@@ -239,7 +245,15 @@ def get_appointments(
         )
 
     if technician_id:
-        query = query.filter(models.Appointment.technician_id == technician_id)
+        query = query.filter(
+            or_(
+                models.Appointment.technician_id == technician_id,
+                (
+                    models.Appointment.technician_id.is_(None)
+                    & (models.Appointment.preferred_technician_id == technician_id)
+                ),
+            )
+        )
 
     return query.order_by(models.Appointment.appointment_time.asc()).all()
 
@@ -275,7 +289,7 @@ def update_appointment(db: Session, appointment_id: int, appointment: schemas.Ap
     for key, value in payload.items():
         setattr(db_appointment, key, value)
 
-    db_appointment.updated_at = datetime.utcnow()
+    db_appointment.updated_at = datetime.now()
 
     db.commit()
     db.refresh(db_appointment)
@@ -320,32 +334,43 @@ def _specialty_matches(service_name: str, specialties: str | None) -> bool:
     if not service_items:
         service_items = [service_name.strip().lower()]
 
+    if any(item in specialty_parts for item in service_items):
+        return True
+
     service_map = {
-        "manicure": ["manicure / pedicure (gel)"],
-        "pedicure": ["manicure / pedicure (gel)"],
-        "classic manicure": ["manicure / pedicure (gel)"],
-        "classic pedicure": ["manicure / pedicure (gel)"],
-        "spa pedicure": ["manicure / pedicure (gel)"],
-        "gel manicure": ["manicure / pedicure (gel)"],
-        "gel pedicure": ["manicure / pedicure (gel)"],
-        "paraffin treatment": ["manicure / pedicure (gel)"],
+        "manicure": ["manicure / pedicure"],
+        "pedicure": ["manicure / pedicure"],
+        "classic manicure": ["manicure / pedicure"],
+        "deluxe manicure": ["manicure / pedicure"],
+        "classic pedicure": ["manicure / pedicure"],
+        "deluxe pedicure": ["manicure / pedicure"],
+        "spa pedicure": ["manicure / pedicure"],
+        "jelly pedicure": ["manicure / pedicure"],
+        "gel manicure": ["manicure / pedicure", "gel"],
+        "gel pedicure": ["manicure / pedicure", "gel"],
+        "paraffin treatment": ["manicure / pedicure"],
 
-        "acrylic": ["acrylic", "acrylic (nail art)"],
-        "acrylic full set": ["acrylic", "acrylic (nail art)"],
-        "pink and white": ["acrylic", "acrylic (nail art)"],
-        "fill": ["acrylic", "acrylic (nail art)"],
-        "nail repair": ["acrylic", "acrylic (nail art)", "hard gel", "builder gel"],
+        "acrylic": ["acrylic"],
+        "acrylic full set": ["acrylic"],
+        "acrylic fill": ["acrylic"],
+        "pink and white": ["acrylic", "nail art"],
+        "nail repair": ["nail repair / removal", "acrylic", "gel", "builder / hard gel"],
 
-        "dipping": ["dipping"],
+        "dipping": ["dip powder"],
+        "dip powder": ["dip powder"],
 
-        "hard gel": ["hard gel"],
-        "builder gel": ["builder gel"],
-        "gel x": ["gel x"],
+        "gel full set": ["gel"],
+        "gel fill": ["gel"],
+        "hard gel": ["builder / hard gel", "gel"],
+        "builder gel": ["builder / hard gel"],
+        "gel x": ["gel"],
 
-        "nail art": ["acrylic (nail art)", "gel x", "hard gel", "builder gel"],
-        "chrome": ["acrylic (nail art)", "gel x", "hard gel", "builder gel"],
-        "cat eye": ["acrylic (nail art)", "gel x", "hard gel", "builder gel"],
-        "polish change": ["manicure / pedicure (gel)"],
+        "nail art": ["nail art"],
+        "french tip": ["nail art"],
+        "ombre": ["nail art"],
+        "chrome": ["nail art"],
+        "cat eye": ["nail art"],
+        "polish change": ["manicure / pedicure"],
 
         "waxing": ["waxing"],
         "eyebrows": ["waxing"],
@@ -354,7 +379,7 @@ def _specialty_matches(service_name: str, specialties: str | None) -> bool:
 
         "facial": ["facial"],
 
-        "removal": ["acrylic", "dipping", "gel x", "hard gel", "builder gel"],
+        "removal": ["nail repair / removal", "acrylic", "dip powder", "gel", "builder / hard gel"],
     }
 
     required_specialties = set()
@@ -370,25 +395,64 @@ def _specialty_matches(service_name: str, specialties: str | None) -> bool:
     return any(specialty in required_specialties for specialty in specialty_parts)
 
 
-def _get_technician_active_turn_today(db: Session, technician_id: int):
+def _get_technician_active_turn_today(db: Session, technician_id: int, exclude_turn_id: int | None = None):
     today = date.today()
     start_dt = datetime.combine(today, time.min)
     end_dt = datetime.combine(today, time.max)
 
-    return (
+    query = (
         db.query(models.Turn)
         .filter(models.Turn.technician_id == technician_id)
         .filter(models.Turn.created_at >= start_dt, models.Turn.created_at <= end_dt)
         .filter(models.Turn.status.in_(["waiting", "assigned", "in_service"]))
-        .first()
     )
 
+    if exclude_turn_id:
+        query = query.filter(models.Turn.id != exclude_turn_id)
 
-def _is_technician_free_today(db: Session, technician_id: int) -> bool:
-    return _get_technician_active_turn_today(db, technician_id) is None
+    return query.first()
 
 
-def _get_candidate_technicians_for_service(db: Session, service_name: str):
+def _is_technician_free_today(db: Session, technician_id: int, exclude_turn_id: int | None = None) -> bool:
+    return _get_technician_active_turn_today(db, technician_id, exclude_turn_id) is None
+
+
+def _get_active_turn_for_customer(db: Session, customer_name: str, customer_phone: str | None = None):
+    query = db.query(models.Turn).filter(models.Turn.status.in_(["waiting", "assigned", "in_service"]))
+
+    phone_digits = "".join(ch for ch in (customer_phone or "") if ch.isdigit())
+    if phone_digits:
+        turns = query.order_by(models.Turn.id.desc()).all()
+        return next(
+            (
+                turn
+                for turn in turns
+                if "".join(ch for ch in (turn.customer_phone or "") if ch.isdigit()) == phone_digits
+            ),
+            None,
+        )
+
+    query = query.filter(func.lower(models.Turn.customer_name) == customer_name.lower())
+
+    return query.order_by(models.Turn.id.desc()).first()
+
+
+def _move_future_turn_to_today(db: Session, db_turn: models.Turn):
+    now = datetime.now()
+    if db_turn.created_at and db_turn.created_at.date() != date.today():
+        db_turn.created_at = now
+        db_turn.turn_number = _get_next_turn_number_for_today(db)
+        if db_turn.assigned_at and db_turn.assigned_at.date() != date.today():
+            db_turn.assigned_at = now
+        if db_turn.started_at and db_turn.started_at.date() != date.today():
+            db_turn.started_at = now
+        db.commit()
+        db.refresh(db_turn)
+
+    return db_turn
+
+
+def _get_candidate_technicians_for_service(db: Session, service_name: str, exclude_turn_id: int | None = None):
     technicians = (
         db.query(models.Technician)
         .filter(models.Technician.status == "active")
@@ -397,13 +461,13 @@ def _get_candidate_technicians_for_service(db: Session, service_name: str):
     )
 
     matched = [tech for tech in technicians if _specialty_matches(service_name, tech.specialties)]
-    free_matched = [tech for tech in matched if _is_technician_free_today(db, tech.id)]
+    free_matched = [tech for tech in matched if _is_technician_free_today(db, tech.id, exclude_turn_id)]
 
     return free_matched
 
 
-def _choose_best_technician(db: Session, service_name: str):
-    candidates = _get_candidate_technicians_for_service(db, service_name)
+def _choose_best_technician(db: Session, service_name: str, exclude_turn_id: int | None = None):
+    candidates = _get_candidate_technicians_for_service(db, service_name, exclude_turn_id)
     if not candidates:
         return None
 
@@ -413,7 +477,7 @@ def _choose_best_technician(db: Session, service_name: str):
 
 def create_turn(db: Session, turn: schemas.TurnCreate):
     next_turn = _get_next_turn_number_for_today(db)
-    now = datetime.utcnow()
+    now = datetime.now()
 
     db_turn = models.Turn(
         turn_number=next_turn,
@@ -461,6 +525,30 @@ def assign_next_turn(db: Session, payload: schemas.AssignTurnRequest):
 
 
 def assign_turn_auto(db: Session, payload: schemas.AutoAssignTurnRequest):
+    existing_turn = _get_active_turn_for_customer(db, payload.customer_name, payload.customer_phone)
+    if existing_turn:
+        existing_turn = _move_future_turn_to_today(db, existing_turn)
+
+        if existing_turn.status == "waiting":
+            technician = _choose_best_technician(db, payload.service_name, exclude_turn_id=existing_turn.id)
+            if not technician:
+                raise ValueError("No available technician found for auto assignment")
+
+            now = datetime.now()
+            existing_turn.service_name = payload.service_name
+            existing_turn.technician_id = technician.id
+            existing_turn.preferred_technician_id = payload.preferred_technician_id
+            existing_turn.assigned_by = "system"
+            existing_turn.status = "assigned"
+            existing_turn.assigned_at = now
+            existing_turn.discount_type = payload.discount_type
+            existing_turn.discount_value = payload.discount_value
+            existing_turn.discount_label = payload.discount_label
+            db.commit()
+            db.refresh(existing_turn)
+
+        return existing_turn
+
     technician = _choose_best_technician(db, payload.service_name)
     if not technician:
         raise ValueError("No available technician found for auto assignment")
@@ -485,6 +573,12 @@ def assign_turn_auto(db: Session, payload: schemas.AutoAssignTurnRequest):
 
 
 def assign_turn_preferred(db: Session, payload: schemas.AssignPreferredTurnRequest):
+    existing_turn = _get_active_turn_for_customer(db, payload.customer_name, payload.customer_phone)
+    if existing_turn:
+        existing_turn = _move_future_turn_to_today(db, existing_turn)
+        if existing_turn.status != "waiting":
+            return existing_turn
+
     technician = get_technician(db, payload.preferred_technician_id)
     if not technician:
         raise ValueError("Preferred technician not found")
@@ -492,8 +586,28 @@ def assign_turn_preferred(db: Session, payload: schemas.AssignPreferredTurnReque
     if technician.status != "active" or technician.availability != "available today":
         raise ValueError("Preferred technician is not available today")
 
-    if not _is_technician_free_today(db, technician.id):
+    if not _specialty_matches(payload.service_name, technician.specialties):
+        raise ValueError("Preferred technician does not match the selected service")
+
+    if not _is_technician_free_today(db, technician.id, existing_turn.id if existing_turn else None):
         raise ValueError("This technician is already assigned to another customer")
+
+    if existing_turn:
+        now = datetime.now()
+        existing_turn.service_name = payload.service_name
+        existing_turn.technician_id = technician.id
+        existing_turn.preferred_technician_id = payload.preferred_technician_id
+        existing_turn.source = payload.source
+        existing_turn.assigned_by = "manager"
+        existing_turn.notes = payload.notes
+        existing_turn.status = "assigned"
+        existing_turn.assigned_at = now
+        existing_turn.discount_type = payload.discount_type
+        existing_turn.discount_value = payload.discount_value
+        existing_turn.discount_label = payload.discount_label
+        db.commit()
+        db.refresh(existing_turn)
+        return existing_turn
 
     return create_turn(
         db,
@@ -541,7 +655,7 @@ def update_turn_status(db: Session, turn_id: int, status: str):
 
     db_turn.status = status
 
-    now = datetime.utcnow()
+    now = datetime.now()
     if status == "assigned" and not db_turn.assigned_at:
         db_turn.assigned_at = now
     if status == "in_service" and not db_turn.started_at:
@@ -572,6 +686,9 @@ def reassign_turn(db: Session, turn_id: int, payload: schemas.ReassignTurnReques
     if technician.status != "active" or technician.availability != "available today":
         raise ValueError("Technician is not available today")
 
+    if not _specialty_matches(db_turn.service_name, technician.specialties):
+        raise ValueError("Technician does not match this customer's selected service")
+
     if technician.id != db_turn.technician_id and not _is_technician_free_today(db, technician.id):
         raise ValueError("This technician is already assigned to another customer")
 
@@ -579,7 +696,7 @@ def reassign_turn(db: Session, turn_id: int, payload: schemas.ReassignTurnReques
     db_turn.assigned_by = payload.assigned_by or "manager"
     db_turn.notes = payload.notes if payload.notes is not None else db_turn.notes
     db_turn.status = "assigned"
-    db_turn.assigned_at = datetime.utcnow()
+    db_turn.assigned_at = datetime.now()
 
     db.commit()
     db.refresh(db_turn)
@@ -591,7 +708,7 @@ def start_turn_service(db: Session, turn_id: int, payload: schemas.TurnStartRequ
     if not db_turn:
         return None
 
-    now = datetime.utcnow()
+    now = datetime.now()
     db_turn.status = "in_service"
     if not db_turn.assigned_at:
         db_turn.assigned_at = now
@@ -610,7 +727,7 @@ def complete_turn_service(db: Session, turn_id: int, payload: schemas.TurnComple
     if not db_turn:
         return None
 
-    now = datetime.utcnow()
+    now = datetime.now()
     db_turn.status = "done"
     if not db_turn.assigned_at:
         db_turn.assigned_at = now
@@ -654,7 +771,7 @@ def update_inventory_item(db: Session, item_id: int, payload: schemas.InventoryI
     for key, value in update_data.items():
         setattr(db_item, key, value)
 
-    db_item.updated_at = datetime.utcnow()
+    db_item.updated_at = datetime.now()
 
     db.commit()
     db.refresh(db_item)
@@ -743,3 +860,147 @@ def delete_checkout(db: Session, checkout_id: int):
     db.delete(db_checkout)
     db.commit()
     return True
+
+
+# ----------------------------
+# Income Reports
+# ----------------------------
+def _money(value) -> float:
+    return round(float(value or 0), 2)
+
+
+def _period_range(anchor_date: date, period: str):
+    if period == "day":
+        return anchor_date, anchor_date
+    if period == "week":
+        start_date = anchor_date - timedelta(days=anchor_date.weekday())
+        return start_date, start_date + timedelta(days=6)
+    if period == "year":
+        return anchor_date.replace(month=1, day=1), anchor_date.replace(month=12, day=31)
+    raise ValueError("Unsupported income period")
+
+
+def _checkouts_for_range(db: Session, start_date: date, end_date: date):
+    start_dt = datetime.combine(start_date, time.min)
+    end_dt = datetime.combine(end_date, time.max)
+    return (
+        db.query(models.Checkout)
+        .filter(models.Checkout.created_at >= start_dt)
+        .filter(models.Checkout.created_at <= end_dt)
+        .order_by(models.Checkout.created_at.desc(), models.Checkout.id.desc())
+        .all()
+    )
+
+
+def _turn_lookup(db: Session, checkouts):
+    turn_ids = [checkout.turn_id for checkout in checkouts if checkout.turn_id]
+    if not turn_ids:
+        return {}
+    turns = db.query(models.Turn).filter(models.Turn.id.in_(turn_ids)).all()
+    return {turn.id: turn for turn in turns}
+
+
+def _technician_lookup(db: Session):
+    technicians = db.query(models.Technician).order_by(models.Technician.full_name.asc()).all()
+    return {technician.id: technician for technician in technicians}
+
+
+def _income_detail(checkout: models.Checkout, technicians_by_id: dict, turns_by_id: dict):
+    technician = technicians_by_id.get(checkout.technician_id)
+    turn = turns_by_id.get(checkout.turn_id)
+    return {
+        "checkout_id": checkout.id,
+        "turn_id": checkout.turn_id,
+        "turn_number": turn.turn_number if turn else None,
+        "customer_name": checkout.customer_name,
+        "customer_phone": checkout.customer_phone,
+        "technician_id": checkout.technician_id,
+        "technician_name": technician.full_name if technician else None,
+        "service_name": checkout.service_name,
+        "payment_method": checkout.payment_method,
+        "gross_before_discount": _money(checkout.subtotal),
+        "discount_amount": _money(checkout.discount_amount),
+        "net_after_discount": _money(checkout.net_service),
+        "tech_60_percent": _money(checkout.technician_share),
+        "tip_amount": _money(checkout.tip_amount),
+        "tech_total": _money(checkout.technician_total),
+        "salon_income_after_tech": _money(checkout.salon_actual_revenue),
+        "customer_pays": _money(checkout.customer_pays),
+        "created_at": checkout.created_at,
+        "note": checkout.note,
+    }
+
+
+def _salon_period_summary(db: Session, anchor_date: date, period: str):
+    start_date, end_date = _period_range(anchor_date, period)
+    checkouts = _checkouts_for_range(db, start_date, end_date)
+
+    return {
+        "period": period,
+        "start_date": start_date,
+        "end_date": end_date,
+        "income_before_discount": _money(sum(_money(checkout.subtotal) for checkout in checkouts)),
+        "total_discount": _money(sum(_money(checkout.discount_amount) for checkout in checkouts)),
+        "income_after_discount": _money(sum(_money(checkout.net_service) for checkout in checkouts)),
+        "tech_60_percent_total": _money(sum(_money(checkout.technician_share) for checkout in checkouts)),
+        "tech_tip_total": _money(sum(_money(checkout.tip_amount) for checkout in checkouts)),
+        "total_paid_to_techs": _money(sum(_money(checkout.technician_total) for checkout in checkouts)),
+        "salon_income_after_techs": _money(sum(_money(checkout.salon_actual_revenue) for checkout in checkouts)),
+        "turns": len(checkouts),
+    }
+
+
+def get_tech_income_report(db: Session, report_date: date, technician_id: int | None = None):
+    day_start, day_end = _period_range(report_date, "day")
+    checkouts = _checkouts_for_range(db, day_start, day_end)
+    if technician_id:
+        checkouts = [checkout for checkout in checkouts if checkout.technician_id == technician_id]
+
+    technicians_by_id = _technician_lookup(db)
+    turns_by_id = _turn_lookup(db, checkouts)
+
+    grouped: dict[int | None, list] = {}
+    for checkout in checkouts:
+        grouped.setdefault(checkout.technician_id, []).append(checkout)
+
+    summaries = []
+    for group_technician_id, tech_checkouts in grouped.items():
+        technician = technicians_by_id.get(group_technician_id)
+        details = [
+            _income_detail(checkout, technicians_by_id, turns_by_id)
+            for checkout in tech_checkouts
+        ]
+        summaries.append(
+            {
+                "technician_id": group_technician_id,
+                "technician_name": technician.full_name if technician else "Unassigned Technician",
+                "date": report_date,
+                "gross_before_60": _money(sum(_money(checkout.subtotal) for checkout in tech_checkouts)),
+                "tech_after_60": _money(sum(_money(checkout.technician_share) for checkout in tech_checkouts)),
+                "tip_total": _money(sum(_money(checkout.tip_amount) for checkout in tech_checkouts)),
+                "tech_total": _money(sum(_money(checkout.technician_total) for checkout in tech_checkouts)),
+                "turns": len(tech_checkouts),
+                "details": details,
+            }
+        )
+
+    summaries.sort(key=lambda item: item["technician_name"].lower())
+    return {"date": report_date, "technicians": summaries}
+
+
+def get_salon_income_report(db: Session, report_date: date):
+    day_start, day_end = _period_range(report_date, "day")
+    day_checkouts = _checkouts_for_range(db, day_start, day_end)
+    technicians_by_id = _technician_lookup(db)
+    turns_by_id = _turn_lookup(db, day_checkouts)
+
+    return {
+        "date": report_date,
+        "day": _salon_period_summary(db, report_date, "day"),
+        "week": _salon_period_summary(db, report_date, "week"),
+        "year": _salon_period_summary(db, report_date, "year"),
+        "details": [
+            _income_detail(checkout, technicians_by_id, turns_by_id)
+            for checkout in day_checkouts
+        ],
+    }
