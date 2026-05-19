@@ -77,7 +77,7 @@ Backend URLs:
 Open:
 
 ```text
-frontend\index.html
+start ../frontend\index.html
 ```
 
 You can open it directly in a browser or use VS Code Live Server.
@@ -87,7 +87,6 @@ You can open it directly in a browser or use VS Code Live Server.
 Open a terminal in the check-in backend folder and run:
 
 ```powershell
-venv\Scripts\Activate.ps1
 python -m pytest app\test_main.py -q
 ```
 
