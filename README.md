@@ -54,7 +54,7 @@ Nail-System-main/
 Open a terminal in:
 
 ```text
-C:\Users\Flying Phoenix PCs\source\repos\Nail-System-main\Nail-System-main\backend
+cd backend
 ```
 
 Then run:
