@@ -27,6 +27,7 @@
           <p id="ad-text">Visit more often and enjoy exclusive salon benefits.</p>
         </div>
       </div>
+      <p class="promo-disclaimer">Promotion images and offers are for advertising only.</p>
     </section>
 
     <section class="form-panel">
@@ -47,7 +48,7 @@
             type="text"
             id="phone_number"
             name="phone_number"
-            placeholder=""
+            placeholder="(555) 123-4567"
             inputmode="numeric"
             autocomplete="off"
             maxlength="14"
@@ -63,7 +64,7 @@
         <p class="subtitle">Please complete your information</p>
         <form id="new-customer-form">
           <input type="text" name="full_name" placeholder="Full Name" required />
-          <input type="date" id="date_of_birth" name="date_of_birth" required />
+          <input type="text" id="date_of_birth" name="date_of_birth" placeholder="MM-DD-YYYY" inputmode="numeric" maxlength="10" pattern="\d{2}-\d{2}-\d{4}" required />
           <input type="email" name="email" placeholder="Email (optional)" />
           <input type="text" name="referral_code" placeholder="Referral Code (optional)" />
           <button type="submit">Continue</button>

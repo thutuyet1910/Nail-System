@@ -193,15 +193,36 @@ function setDOBLimits() {
 
   dobInput.max = getTodayISODate();
   dobInput.min = "1900-01-01";
+  dobInput.setAttribute("maxlength", "10");
   dobInput.setAttribute("inputmode", "numeric");
+}
+
+function formatMaskedDate(value) {
+  const digits = String(value || "").replace(/\D/g, "").slice(0, 8);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}-${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4)}`;
+}
+
+function displayDateToISO(value) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value || "")) return value;
+  if (!/^\d{2}-\d{2}-\d{4}$/.test(value || "")) return "";
+  const [month, day, year] = value.split("-");
+  return `${year}-${month}-${day}`;
+}
+
+function limitDOBYearValue() {
+  if (!dobInput?.value) return;
+  dobInput.value = formatMaskedDate(dobInput.value);
 }
 
 function validateDOBInput() {
   if (!dobInput) return true;
 
-  const value = dobInput.value;
+  limitDOBYearValue();
+  const value = displayDateToISO(dobInput.value);
 
-  if (!value) {
+  if (!dobInput.value) {
     dobInput.setCustomValidity("Please select your date of birth.");
     return false;
   }
@@ -533,6 +554,11 @@ async function loadTodayCheckInOrder() {
         </div>
       `)
       .join("");
+
+    checkinOrderList.querySelector(".queue-item:last-child")?.scrollIntoView({
+      behavior: "smooth",
+      block: "end"
+    });
   } catch (error) {
     checkinOrderList.innerHTML = `<p class="queue-empty">Unable to load check-in order.</p>`;
   }
@@ -692,7 +718,7 @@ function buildNewCustomerPayload() {
     phone_number: phoneNumber,
     full_name: formData.get("full_name")?.trim(),
     email: formData.get("email")?.trim() || null,
-    date_of_birth: formData.get("date_of_birth"),
+    date_of_birth: displayDateToISO(formData.get("date_of_birth")),
     referral_code: referralCode || null
   };
 }
