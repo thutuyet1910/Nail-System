@@ -1,8 +1,13 @@
 import re
 from datetime import date, datetime
-from typing import Optional
+from typing import Annotated, Optional
 
-from pydantic import BaseModel, computed_field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, computed_field, field_validator
+
+from .timeutils import today_local
+
+MIN_BIRTH_DATE = date(1900, 1, 1)
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def format_phone_display(digits: str) -> str:
@@ -16,37 +21,48 @@ def validate_phone(v: str) -> str:
     return digits_only
 
 
+def _clean_name(v: str) -> str:
+    v = v.strip()
+    if not v:
+        raise ValueError("Name cannot be empty.")
+    return v
+
+
+def _clean_email(v: Optional[str]) -> Optional[str]:
+    """Empty -> None; otherwise it must look like an email address."""
+    if v is None:
+        return None
+    v = v.strip()
+    if not v:
+        return None
+    if not _EMAIL_RE.match(v):
+        raise ValueError("Please enter a valid email address.")
+    return v
+
+
+def _check_birth_date(v: date) -> date:
+    if v > today_local():
+        raise ValueError("Date of birth cannot be in the future.")
+    if v < MIN_BIRTH_DATE:
+        raise ValueError("Date of birth must be 1900 or later.")
+    return v
+
+
+Phone = Annotated[str, AfterValidator(validate_phone)]
+Name = Annotated[str, AfterValidator(_clean_name)]
+OptionalEmail = Annotated[Optional[str], AfterValidator(_clean_email)]
+BirthDate = Annotated[date, AfterValidator(_check_birth_date)]
+
+
+# ----------------------------
+# Customers
+# ----------------------------
 class CustomerCreate(BaseModel):
-    full_name: str
-    phone_number: str
-    email: Optional[str] = None
-    date_of_birth: date
-    referral_code: Optional[str] = None
-
-    @field_validator("phone_number")
-    @classmethod
-    def check_phone(cls, v: str) -> str:
-        return validate_phone(v)
-
-
-class ServiceResponse(BaseModel):
-    id: int
-    name: str
-
-    model_config = {"from_attributes": True}
-
-
-class CheckInCreate(BaseModel):
-    selected_service_ids: list[int]
-
-    @field_validator("selected_service_ids")
-    @classmethod
-    def validate_service_ids(cls, v: list[int]) -> list[int]:
-        cleaned = [int(item) for item in v if int(item) > 0]
-        unique_ids = list(dict.fromkeys(cleaned))
-        if not unique_ids:
-            raise ValueError("Please select at least one service.")
-        return unique_ids
+    full_name: Name
+    phone_number: Phone
+    email: OptionalEmail = None
+    date_of_birth: BirthDate
+    referral_code: Optional[str] = None  
 
 
 class CustomerResponse(BaseModel):
@@ -71,7 +87,39 @@ class CustomerResponse(BaseModel):
     def phone_number_formatted(self) -> str:
         return format_phone_display(self.phone_number)
 
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UpdatePhoneRequest(BaseModel):
+    new_phone_number: Phone
+
+
+class UpdateCustomerProfileRequest(BaseModel):
+    full_name: Name
+    phone_number: Phone
+    email: OptionalEmail = None
+
+
+# ----------------------------
+# Services / check-in
+# ----------------------------
+class ServiceResponse(BaseModel):
+    id: int
+    name: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CheckInCreate(BaseModel):
+    selected_service_ids: list[int]
+
+    @field_validator("selected_service_ids")
+    @classmethod
+    def validate_service_ids(cls, v: list[int]) -> list[int]:
+        unique_ids = list(dict.fromkeys(item for item in v if item > 0))
+        if not unique_ids:
+            raise ValueError("Please select at least one service.")
+        return unique_ids
 
 
 class CheckInResponse(BaseModel):
@@ -84,18 +132,31 @@ class CheckInResponse(BaseModel):
     referral_discount_percent: int
     birthday_discount_available: bool
     birthday_discount_amount: int
-    discounts_applied: list = []
+    discounts_applied: list[dict] = []
     selected_services: list[str] = []
 
 
-class ApplyReferralCodeRequest(BaseModel):
+class TodayCheckInItem(BaseModel):
+    position: int
+    full_name: str
     phone_number: str
-    referral_code: str
+    checked_in_at: datetime
+    services: list[str] = []
+    discount_type: Optional[str] = None
+    discount_value: float = 0
+    discount_label: Optional[str] = None
 
-    @field_validator("phone_number")
-    @classmethod
-    def check_phone(cls, v: str) -> str:
-        return validate_phone(v)
+
+class TodayCheckInResponse(BaseModel):
+    checkins: list[TodayCheckInItem]
+
+
+# ----------------------------
+# Referrals / birthdays
+# ----------------------------
+class ApplyReferralCodeRequest(BaseModel):
+    phone_number: Phone
+    referral_code: str
 
 
 class ApplyReferralCodeResponse(BaseModel):
@@ -114,39 +175,3 @@ class BirthdayReminderResponse(BaseModel):
     date_of_birth: date
     days_until_birthday: int
     birthday_discount_amount: int
-
-
-class TodayCheckInItem(BaseModel):
-    position: int
-    full_name: str
-    phone_number: str
-    checked_in_at: datetime
-    discount_type: Optional[str] = None
-    discount_value: float = 0
-    discount_label: Optional[str] = None
-
-    model_config = {"from_attributes": True}
-
-
-class TodayCheckInResponse(BaseModel):
-    checkins: list[TodayCheckInItem]
-
-
-class UpdatePhoneRequest(BaseModel):
-    new_phone_number: str
-
-    @field_validator("new_phone_number")
-    @classmethod
-    def check_phone(cls, v: str) -> str:
-        return validate_phone(v)
-
-
-class UpdateCustomerProfileRequest(BaseModel):
-    full_name: str
-    phone_number: str
-    email: Optional[str] = None
-
-    @field_validator("phone_number")
-    @classmethod
-    def check_phone(cls, v: str) -> str:
-        return validate_phone(v)
