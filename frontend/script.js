@@ -80,34 +80,24 @@ let availableServices = [];
 let selectedNewServiceIds = [];
 let selectedExistingServiceIds = [];
 
+// Remembers the last thank-you message so it can be re-translated
+let lastThankYou = null;
+
 const carouselSlides = [
-  {
-    image: "https://images.unsplash.com/photo-1604654894610-df63bc536371?auto=format&fit=crop&w=1400&q=80",
-    badge: "Referral Reward",
-    title: "Get 10% Off With Referral",
-    text: "Use a valid referral code and enjoy 10% off your salon services."
-  },
-  {
-    image: "https://images.unsplash.com/photo-1522337660859-02fbefca4702?auto=format&fit=crop&w=1400&q=80",
-    badge: "Birthday Special",
-    title: "Birthday Reward",
-    text: "Celebrate your birthday with a special $10 off on your birthday."
-  },
-  {
-    image: "https://images.unsplash.com/photo-1519014816548-bf5fe059798b?auto=format&fit=crop&w=1400&q=80",
-    badge: "Salon Rewards",
-    title: "Enjoy Exclusive Benefits",
-    text: "Visit more often and unlock special salon rewards and referral benefits."
-  },
-  {
-    image: "https://images.unsplash.com/photo-1610992015732-2449b76344bc?auto=format&fit=crop&w=1400&q=80",
-    badge: "Relax & Enjoy",
-    title: "Check In and Relax",
-    text: "Check in quickly, take a seat, and enjoy a relaxing salon experience."
-  }
+  { image: "https://images.unsplash.com/photo-1604654894610-df63bc536371?auto=format&fit=crop&w=1400&q=80", key: "slide1" },
+  { image: "https://images.unsplash.com/photo-1522337660859-02fbefca4702?auto=format&fit=crop&w=1400&q=80", key: "slide2" },
+  { image: "https://images.unsplash.com/photo-1519014816548-bf5fe059798b?auto=format&fit=crop&w=1400&q=80", key: "slide3" },
+  { image: "https://images.unsplash.com/photo-1610992015732-2449b76344bc?auto=format&fit=crop&w=1400&q=80", key: "slide4" }
 ];
 
 let carouselIndex = 0;
+
+const localeMap = { en: "en-US", vi: "vi-VN", es: "es-ES" };
+
+// Template helper: tf("welcomeBack", { name: "Anna" })
+function tf(key, vars = {}) {
+  return t(key).replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? "");
+}
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -125,7 +115,9 @@ function rawDigits(value) {
 }
 
 function safeText(value) {
-  return value && String(value).trim() ? value : "Not provided";
+  return value && String(value).trim()
+    ? value
+    : t("notProvided");
 }
 
 function getTodayISODate() {
@@ -137,17 +129,17 @@ function getTodayISODate() {
 }
 
 function formatDateForDisplay(dateValue) {
-  if (!dateValue) return "Not provided";
+  if (!dateValue) return t("notProvided");
 
   const parts = String(dateValue).split("-");
-  if (parts.length !== 3) return "Not provided";
+  if (parts.length !== 3) return t("notProvided");
 
   const [year, month, day] = parts.map(Number);
   const date = new Date(year, month - 1, day);
 
-  if (Number.isNaN(date.getTime())) return "Not provided";
+  if (Number.isNaN(date.getTime())) return t("notProvided");
 
-  return date.toLocaleDateString([], {
+  return date.toLocaleDateString(localeMap[currentLanguage] || "en-US", {
     year: "numeric",
     month: "long",
     day: "numeric"
@@ -223,12 +215,12 @@ function validateDOBInput() {
   const value = displayDateToISO(dobInput.value);
 
   if (!dobInput.value) {
-    dobInput.setCustomValidity("Please select your date of birth.");
+    dobInput.setCustomValidity(t("dobRequired"));
     return false;
   }
 
   if (!isValidDOB(value)) {
-    dobInput.setCustomValidity("Please enter a valid date of birth with a 4-digit year.");
+    dobInput.setCustomValidity(t("dobInvalid"));
     return false;
   }
 
@@ -261,13 +253,16 @@ function getErrorMessage(data, fallback = "Something went wrong.") {
   return fallback;
 }
 
+// Service names are intentionally kept exactly as returned by the API
 function getServiceNameById(id) {
   const service = availableServices.find(item => item.id === id);
   return service ? service.name : `Service ${id}`;
 }
 
 function formatServiceNamesFromIds(ids) {
-  if (!ids || ids.length === 0) return "No services selected";
+  if (!ids || ids.length === 0) {
+    return t("noServicesSelected");
+  }
   return ids.map(getServiceNameById).join(", ");
 }
 
@@ -289,10 +284,10 @@ async function loadServices() {
   } catch (error) {
     console.error("Failed to load services:", error);
     if (newServiceList) {
-      newServiceList.innerHTML = `<p class="queue-empty">Unable to load services.</p>`;
+      newServiceList.innerHTML = `<p class="queue-empty">${t("unableServices")}</p>`;
     }
     if (existingServiceList) {
-      existingServiceList.innerHTML = `<p class="queue-empty">Unable to load services.</p>`;
+      existingServiceList.innerHTML = `<p class="queue-empty">${t("unableServices")}</p>`;
     }
   }
 }
@@ -307,7 +302,8 @@ function renderServiceList(container, selectedServiceIds, searchTerm = "") {
   );
 
   if (filteredServices.length === 0) {
-    container.innerHTML = `<p class="queue-empty">No matching services found.</p>`;
+    container.innerHTML =
+      `<p class="queue-empty">${t("noMatchingServices")}</p>`;
     return;
   }
 
@@ -421,9 +417,9 @@ function renderSlide(index) {
   const slide = carouselSlides[index];
   carouselImage.style.backgroundImage = `url("${slide.image}")`;
 
-  if (adBadge) adBadge.textContent = slide.badge;
-  if (adTitle) adTitle.textContent = slide.title;
-  if (adText) adText.textContent = slide.text;
+  if (adBadge) adBadge.textContent = t(`${slide.key}Badge`);
+  if (adTitle) adTitle.textContent = t(`${slide.key}Title`);
+  if (adText) adText.textContent = t(`${slide.key}Text`);
 }
 
 function startCarousel() {
@@ -473,10 +469,13 @@ function hideAllMainScreens() {
   thankYouScreen.style.display = "none";
 }
 
-function showThankYouScreen(text) {
+function showThankYouScreen(key, serviceIds) {
+  lastThankYou = { key, ids: [...serviceIds] };
   hideAllMainScreens();
   thankYouScreen.style.display = "block";
-  thankYouMessage.textContent = text;
+  thankYouMessage.textContent = tf(key, {
+    services: formatServiceNamesFromIds(lastThankYou.ids)
+  });
 }
 
 function formatCheckInTime(dateString) {
@@ -489,19 +488,19 @@ function renderExistingCustomerProfile(customer) {
 
   existingCustomerProfile.innerHTML = `
     <div class="profile-row">
-      <span class="profile-label">Name</span>
+      <span class="profile-label">${t("name")}</span>
       <span class="profile-value">${safeText(customer.full_name)}</span>
     </div>
     <div class="profile-row">
-      <span class="profile-label">Phone</span>
+      <span class="profile-label">${t("phone")}</span>
       <span class="profile-value">${safeText(customer.phone_number_formatted || formatPhone(customer.phone_number || ""))}</span>
     </div>
     <div class="profile-row">
-      <span class="profile-label">Email</span>
+      <span class="profile-label">${t("email")}</span>
       <span class="profile-value">${safeText(customer.email)}</span>
     </div>
     <div class="profile-row">
-      <span class="profile-label">Birthday</span>
+      <span class="profile-label">${t("birthday")}</span>
       <span class="profile-value">${formatDateForDisplay(customer.date_of_birth)}</span>
     </div>
   `;
@@ -510,7 +509,7 @@ function renderExistingCustomerProfile(customer) {
 function openExistingCustomerScreen() {
   if (!existingCustomer) return;
 
-  existingCustomerName.textContent = `Welcome back, ${existingCustomer.full_name}`;
+  existingCustomerName.textContent = tf("welcomeBack", { name: existingCustomer.full_name });
   renderExistingCustomerProfile(existingCustomer);
 
   hideAllMainScreens();
@@ -539,7 +538,8 @@ async function loadTodayCheckInOrder() {
     }
 
     if (!data.checkins || data.checkins.length === 0) {
-      checkinOrderList.innerHTML = `<p class="queue-empty">No customers checked in yet.</p>`;
+      checkinOrderList.innerHTML =
+        `<p class="queue-empty">${t("noCustomers")}</p>`;
       return;
     }
 
@@ -560,7 +560,7 @@ async function loadTodayCheckInOrder() {
       block: "end"
     });
   } catch (error) {
-    checkinOrderList.innerHTML = `<p class="queue-empty">Unable to load check-in order.</p>`;
+    checkinOrderList.innerHTML = `<p class="queue-empty">${t("unableQueue")}</p>`;
   }
 }
 
@@ -590,6 +590,7 @@ function resetToMainScreen() {
   phoneNumber = "";
   existingCustomer = null;
   pendingNewCustomerPayload = null;
+  lastThankYou = null;
 }
 
 if (closeBirthdayModalBtn) {
@@ -652,12 +653,12 @@ phoneForm.addEventListener("submit", async (event) => {
   phoneNumber = rawDigits(phoneInput.value);
 
   if (phoneNumber.length !== 10) {
-    messageBox.textContent = "Please enter a valid 10-digit phone number.";
+    messageBox.textContent = t("invalidPhone");
     messageBox.className = "message error";
     return;
   }
 
-  messageBox.textContent = "Checking phone number...";
+  messageBox.textContent = t("checkingPhone");
   messageBox.className = "message";
 
   try {
@@ -678,7 +679,7 @@ phoneForm.addEventListener("submit", async (event) => {
       }
 
       if (statusData.already_checked_in_today) {
-        messageBox.textContent = `${statusData.full_name} has already checked in today.`;
+        messageBox.textContent = tf("alreadyCheckedIn", { name: statusData.full_name });
         messageBox.className = "message error";
         hideAllMainScreens();
         phoneScreen.style.display = "block";
@@ -729,7 +730,7 @@ customerForm.addEventListener("submit", async (event) => {
   const payload = buildNewCustomerPayload();
 
   if (!validateDOBInput() || !isValidDOB(payload.date_of_birth)) {
-    messageBox.textContent = "Please enter a valid date of birth with a 4-digit year.";
+    messageBox.textContent = t("dobInvalid");
     messageBox.className = "message error";
     if (dobInput) dobInput.reportValidity();
     return;
@@ -755,7 +756,7 @@ if (continueToNewReviewBtn) {
     }
 
     if (selectedNewServiceIds.length === 0) {
-      messageBox.textContent = "Please select at least one service.";
+      messageBox.textContent = t("selectOneService");
       messageBox.className = "message error";
       return;
     }
@@ -778,13 +779,13 @@ if (confirmNewCustomerBtn) {
     if (!pendingNewCustomerPayload) return;
 
     if (selectedNewServiceIds.length === 0) {
-      messageBox.textContent = "Please select at least one service.";
+      messageBox.textContent = t("selectOneService");
       messageBox.className = "message error";
       return;
     }
 
     confirmNewCustomerBtn.disabled = true;
-    messageBox.textContent = "Saving customer...";
+    messageBox.textContent = t("savingCustomer");
     messageBox.className = "message";
 
     try {
@@ -836,7 +837,10 @@ if (confirmNewCustomerBtn) {
           throw new Error(getErrorMessage(applyData, "Referral code not found or invalid."));
         }
 
-        referralAppliedMessage = `You’ve received ${applyData.discount_percent}% off today as a referral reward from ${applyData.referral_from_customer_name}.`;
+        referralAppliedMessage = tf("referralApplied", {
+          percent: applyData.discount_percent,
+          from: applyData.referral_from_customer_name
+        });
       }
 
       const checkInResponse = await fetch(
@@ -862,21 +866,25 @@ if (confirmNewCustomerBtn) {
       let successText = "";
 
       if (birthdayDiscount) {
-        successText = `Happy Birthday, ${checkInData.full_name}! ✨
-Enjoy a complimentary $${birthdayDiscount.amount} birthday reward today.
-Sit back, relax, and let us take care of you.`;
+        successText = tf("successBirthday", {
+          name: checkInData.full_name,
+          amount: birthdayDiscount.amount
+        });
       } else if (referralAppliedMessage) {
-        successText = `Welcome, ${checkInData.full_name}! ✨
-${referralAppliedMessage}
-Enjoy your visit with us.`;
+        successText = tf("successWelcomeReferral", {
+          name: checkInData.full_name,
+          referral: referralAppliedMessage
+        });
       } else if (referralRewardDiscount) {
-        successText = `Congratulations, ${checkInData.full_name}! ✨
-Your ${referralRewardDiscount.percent}% referral reward has been unlocked and applied today.
-Thank you for sharing the love with others.`;
+        successText = tf("successRewardUnlocked", {
+          name: checkInData.full_name,
+          percent: referralRewardDiscount.percent
+        });
       } else if (earnedReferralCode) {
-        successText = `You’ve unlocked a special reward, ${checkInData.full_name}! ✨
-Your personal referral code is ${checkInData.referral_code}.
-Share it with friends and give them 10% off their visit.`;
+        successText = tf("successCode", {
+          name: checkInData.full_name,
+          code: checkInData.referral_code
+        });
       }
 
       messageBox.textContent = "";
@@ -888,14 +896,12 @@ Share it with friends and give them 10% off their visit.`;
         showSuccessModal(successText);
       }
 
-      const selectedServicesText = formatServiceNamesFromIds(selectedNewServiceIds);
+      const servicesForThanks = [...selectedNewServiceIds];
 
       pendingNewCustomerPayload = null;
       selectedNewServiceIds.length = 0;
 
-      showThankYouScreen(
-        `You are checked in for: ${selectedServicesText}. Please take a seat and relax. A technician will be with you shortly.`
-      );
+      showThankYouScreen("thankYouNew", servicesForThanks);
     } catch (error) {
       console.error("New customer confirm error:", error);
       messageBox.textContent = error.message || "Failed to save customer.";
@@ -927,7 +933,7 @@ if (backToExistingCustomerBtn) {
 if (continueToExistingReviewBtn) {
   continueToExistingReviewBtn.addEventListener("click", () => {
     if (selectedExistingServiceIds.length === 0) {
-      messageBox.textContent = "Please select at least one service.";
+      messageBox.textContent = t("selectOneService");
       messageBox.className = "message error";
       return;
     }
@@ -948,13 +954,13 @@ if (confirmExistingCustomerBtn) {
     event.stopPropagation();
 
     if (selectedExistingServiceIds.length === 0) {
-      messageBox.textContent = "Please select at least one service.";
+      messageBox.textContent = t("selectOneService");
       messageBox.className = "message error";
       return;
     }
 
     confirmExistingCustomerBtn.disabled = true;
-    messageBox.textContent = "Processing check-in...";
+    messageBox.textContent = t("processingCheckIn");
     messageBox.className = "message";
 
     try {
@@ -975,7 +981,10 @@ if (confirmExistingCustomerBtn) {
           throw new Error(getErrorMessage(applyData, "Failed to apply referral code."));
         }
 
-        referralAppliedMessage = `You’ve received ${applyData.discount_percent}% off today as a referral reward from ${applyData.referral_from_customer_name}.`;
+        referralAppliedMessage = tf("referralApplied", {
+          percent: applyData.discount_percent,
+          from: applyData.referral_from_customer_name
+        });
       }
 
       const checkInResponse = await fetch(
@@ -1001,21 +1010,25 @@ if (confirmExistingCustomerBtn) {
       let successText = "";
 
       if (birthdayDiscount) {
-        successText = `Happy Birthday, ${checkInData.full_name}! ✨
-Enjoy a complimentary $${birthdayDiscount.amount} birthday reward today.
-Sit back, relax, and let us take care of you.`;
+        successText = tf("successBirthday", {
+          name: checkInData.full_name,
+          amount: birthdayDiscount.amount
+        });
       } else if (referralAppliedMessage) {
-        successText = `Welcome back, ${checkInData.full_name}! ✨
-${referralAppliedMessage}
-Enjoy your salon experience.`;
+        successText = tf("successWelcomeBackReferral", {
+          name: checkInData.full_name,
+          referral: referralAppliedMessage
+        });
       } else if (referralRewardDiscount) {
-        successText = `Congratulations, ${checkInData.full_name}! ✨
-Your ${referralRewardDiscount.percent}% referral reward has been unlocked and applied today.
-Thank you for sharing the love with others.`;
+        successText = tf("successRewardUnlocked", {
+          name: checkInData.full_name,
+          percent: referralRewardDiscount.percent
+        });
       } else if (earnedReferralCode) {
-        successText = `You’ve unlocked a special reward, ${checkInData.full_name}! ✨
-Your personal referral code is ${checkInData.referral_code}.
-Share it with friends and give them 10% off their visit.`;
+        successText = tf("successCode", {
+          name: checkInData.full_name,
+          code: checkInData.referral_code
+        });
       }
 
       messageBox.textContent = "";
@@ -1027,14 +1040,12 @@ Share it with friends and give them 10% off their visit.`;
         showSuccessModal(successText);
       }
 
-      const selectedServicesText = formatServiceNamesFromIds(selectedExistingServiceIds);
+      const servicesForThanks = [...selectedExistingServiceIds];
 
       selectedExistingServiceIds.length = 0;
       pendingExistingReferralCode = "";
 
-      showThankYouScreen(
-        `Thank you for checking in for: ${selectedServicesText}. Please take a seat and enjoy your salon experience.`
-      );
+      showThankYouScreen("thankYouExisting", servicesForThanks);
     } catch (error) {
       console.error("Returning customer confirm error:", error);
       messageBox.textContent = error.message || "Failed to process returning customer.";
@@ -1074,18 +1085,18 @@ if (updateProfileForm) {
     const updatedEmail = updateEmailInput.value.trim();
 
     if (!updatedFullName) {
-      messageBox.textContent = "Name is required.";
+      messageBox.textContent = t("nameRequired");
       messageBox.className = "message error";
       return;
     }
 
     if (updatedPhone.length !== 10) {
-      messageBox.textContent = "Phone number must be exactly 10 digits.";
+      messageBox.textContent = t("phoneTenDigits");
       messageBox.className = "message error";
       return;
     }
 
-    messageBox.textContent = "Updating profile...";
+    messageBox.textContent = t("updatingProfile");
     messageBox.className = "message";
 
     try {
@@ -1114,9 +1125,7 @@ if (updateProfileForm) {
       messageBox.textContent = "";
       messageBox.className = "message";
 
-      showSuccessModal(
-        `Profile updated successfully, ${data.full_name}. Your rewards, referral code, birthday benefits, and visit history all stay on the same account.`
-      );
+      showSuccessModal(tf("profileUpdated", { name: data.full_name }));
 
       updateProfileForm.reset();
       openExistingCustomerScreen();
@@ -1127,9 +1136,688 @@ if (updateProfileForm) {
   });
 }
 
+
+// ── Language ──────────────────────────────────────────────────
+
+let currentLanguage = localStorage.getItem("nailSalonLanguage") || "en";
+
+const translations = {
+  en: {
+    salon: "NAIL SALON",
+    welcome: "Welcome to Nail Salon",
+    heroSubtitle:
+      "Check in, enjoy rewards, and relax while we take care of the rest.",
+
+    todayOrder: "Today's Check-In Order",
+    todayOrderSubtitle:
+      "Customers are listed in the order they checked in.",
+    noCustomers: "No customers checked in yet.",
+
+    checkIn: "Check In",
+    enterPhone: "Enter your phone number to continue",
+    continue: "Continue",
+
+    newCustomer: "New Customer",
+    completeInfo: "Please complete your information",
+
+    fullName: "Full Name",
+    emailOptional: "Email (optional)",
+    referralOptional: "Referral Code (optional)",
+    existingReferralOptional: "Enter referral code (optional)",
+
+    selectServices: "Select Services",
+    chooseServices: "Choose your services below.",
+    searchServices: "Search services",
+    back: "Back",
+    reviewInformation: "Review Information",
+
+    reviewTitle: "Review Your Information",
+    checkInformation:
+      "Please check your information before continuing.",
+
+    name: "Name",
+    phone: "Phone",
+    email: "Email",
+    birthday: "Birthday",
+    referral: "Referral",
+    services: "Services",
+
+    edit: "Edit",
+
+    returningCustomer: "Returning Customer",
+    updateProfile: "Update Profile",
+
+    editInformation: "Edit your information below.",
+    phoneNumber: "Phone Number",
+    save: "Save",
+    cancel: "Cancel",
+
+    thankYou: "Thank You!",
+    checkedInRelax:
+      "You are checked in. Please take a seat and relax.",
+    backHome: "Back to Home",
+
+    happyBirthday: "Happy Birthday!",
+    birthdayTen: "You have $10 off today.",
+    awesome: "Awesome",
+
+    checkedIn: "You're Checked In",
+    welcomeRelax:
+      "Welcome! Please relax and enjoy your visit.",
+    lovely: "Lovely",
+
+    specialOffer: "Special Offer",
+    salonRewards: "Salon Rewards",
+    salonRewardsText:
+      "Visit more often and enjoy exclusive salon benefits.",
+
+    promoDisclaimer:
+      "Promotion images and offers are for advertising only.",
+
+    notProvided: "Not provided",
+    noServicesSelected: "No services selected",
+    noMatchingServices: "No matching services found.",
+    unableServices: "Unable to load services.",
+    unableQueue: "Unable to load check-in order.",
+
+    invalidPhone: "Please enter a valid 10-digit phone number.",
+    checkingPhone: "Checking phone number...",
+    selectOneService: "Please select at least one service.",
+    savingCustomer: "Saving customer...",
+    processingCheckIn: "Processing check-in...",
+    nameRequired: "Name is required.",
+    phoneTenDigits: "Phone number must be exactly 10 digits.",
+    updatingProfile: "Updating profile...",
+
+    dobRequired: "Please enter your date of birth.",
+    dobInvalid: "Please enter a valid date of birth with a 4-digit year.",
+    welcomeBack: "Welcome back, {name}",
+    alreadyCheckedIn: "{name} has already checked in today.",
+    referralApplied: "You've received {percent}% off today as a referral reward from {from}.",
+    successBirthday: "Happy Birthday, {name}! ✨\nEnjoy a complimentary ${amount} birthday reward today.\nSit back, relax, and let us take care of you.",
+    successWelcomeReferral: "Welcome, {name}! ✨\n{referral}\nEnjoy your visit with us.",
+    successWelcomeBackReferral: "Welcome back, {name}! ✨\n{referral}\nEnjoy your salon experience.",
+    successRewardUnlocked: "Congratulations, {name}! ✨\nYour {percent}% referral reward has been unlocked and applied today.\nThank you for sharing the love with others.",
+    successCode: "You've unlocked a special reward, {name}! ✨\nYour personal referral code is {code}.\nShare it with friends and give them 10% off their visit.",
+    thankYouNew: "You are checked in for: {services}. Please take a seat and relax. A technician will be with you shortly.",
+    thankYouExisting: "Thank you for checking in for: {services}. Please take a seat and enjoy your salon experience.",
+    profileUpdated: "Profile updated successfully, {name}. Your rewards, referral code, birthday benefits, and visit history all stay on the same account.",
+    slide1Badge: "Referral Reward", slide1Title: "Get 10% Off With Referral", slide1Text: "Use a valid referral code and enjoy 10% off your salon services.",
+    slide2Badge: "Birthday Special", slide2Title: "Birthday Reward", slide2Text: "Celebrate your birthday with a special $10 off on your birthday.",
+    slide3Badge: "Salon Rewards", slide3Title: "Enjoy Exclusive Benefits", slide3Text: "Visit more often and unlock special salon rewards and referral benefits.",
+    slide4Badge: "Relax & Enjoy", slide4Title: "Check In and Relax", slide4Text: "Check in quickly, take a seat, and enjoy a relaxing salon experience."
+  },
+
+
+  vi: {
+    salon: "TIỆM NAIL",
+    welcome: "Chào Mừng Đến Tiệm Nail",
+    heroSubtitle:
+      "Chào mừng bạn đến với tiệm! Vui lòng check-in bên dưới để chúng tôi có thể phục vụ bạn nhanh chóng và chu đáo hơn.",
+
+    todayOrder: "Thứ Tự Check-In Hôm Nay",
+    todayOrderSubtitle:
+      "Khách hàng được hiển thị theo thứ tự check-in.",
+    noCustomers: "Chưa có khách hàng nào check-in.",
+
+    checkIn: "Check-In",
+    enterPhone: "Nhập số điện thoại để tiếp tục",
+    continue: "Tiếp Tục",
+
+    newCustomer: "Khách Hàng Mới",
+    completeInfo: "Vui lòng điền thông tin của bạn",
+
+    fullName: "Họ và Tên",
+    emailOptional: "Email (không bắt buộc)",
+    referralOptional: "Mã giới thiệu (không bắt buộc)",
+    existingReferralOptional: "Nhập mã giới thiệu (không bắt buộc)",
+
+    selectServices: "Chọn Dịch Vụ",
+    chooseServices: "Chọn dịch vụ bên dưới.",
+    searchServices: "Tìm dịch vụ",
+    back: "Quay Lại",
+    reviewInformation: "Kiểm Tra Thông Tin",
+
+    reviewTitle: "Kiểm Tra Thông Tin Của Bạn",
+    checkInformation:
+      "Vui lòng kiểm tra thông tin trước khi tiếp tục.",
+
+    name: "Họ Tên",
+    phone: "Điện Thoại",
+    email: "Email",
+    birthday: "Ngày Sinh",
+    referral: "Giới Thiệu",
+    services: "Dịch Vụ",
+
+    edit: "Chỉnh Sửa",
+
+    returningCustomer: "Khách Hàng Cũ",
+    updateProfile: "Cập Nhật Thông Tin",
+
+    editInformation: "Chỉnh sửa thông tin của bạn bên dưới.",
+    phoneNumber: "Số Điện Thoại",
+    save: "Lưu",
+    cancel: "Hủy",
+
+    thankYou: "Cảm Ơn!",
+    checkedInRelax:
+      "Bạn đã check-in. Vui lòng ngồi chờ và thư giãn.",
+    backHome: "Về Trang Chính",
+
+    happyBirthday: "Chúc Mừng Sinh Nhật!",
+    birthdayTen: "Hôm nay bạn được giảm $10.",
+    awesome: "Tuyệt Vời",
+
+    checkedIn: "Bạn Đã Check-In",
+    welcomeRelax:
+      "Chào mừng! Hãy thư giãn và tận hưởng dịch vụ.",
+    lovely: "Tuyệt Vời",
+
+    specialOffer: "Ưu Đãi Đặc Biệt",
+    salonRewards: "Ưu Đãi Khách Hàng",
+    salonRewardsText:
+      "Ghé tiệm thường xuyên để nhận thêm nhiều ưu đãi.",
+
+    promoDisclaimer:
+      "Hình ảnh và ưu đãi chỉ dùng cho mục đích quảng cáo.",
+
+    notProvided: "Chưa cung cấp",
+    noServicesSelected: "Chưa chọn dịch vụ",
+    noMatchingServices: "Không tìm thấy dịch vụ phù hợp.",
+    unableServices: "Không thể tải danh sách dịch vụ.",
+    unableQueue: "Không thể tải danh sách check-in.",
+
+    invalidPhone: "Vui lòng nhập số điện thoại hợp lệ gồm 10 số.",
+    checkingPhone: "Đang kiểm tra số điện thoại...",
+    selectOneService: "Vui lòng chọn ít nhất một dịch vụ.",
+    savingCustomer: "Đang lưu thông tin khách hàng...",
+    processingCheckIn: "Đang xử lý check-in...",
+    nameRequired: "Vui lòng nhập họ tên.",
+    phoneTenDigits: "Số điện thoại phải có đúng 10 số.",
+    updatingProfile: "Đang cập nhật thông tin...",
+
+    dobRequired: "Vui lòng nhập ngày sinh.",
+    dobInvalid: "Vui lòng nhập ngày sinh hợp lệ với năm gồm 4 chữ số.",
+    welcomeBack: "Chào mừng trở lại, {name}",
+    alreadyCheckedIn: "{name} đã check-in hôm nay.",
+    referralApplied: "Bạn được giảm {percent}% hôm nay nhờ mã giới thiệu từ {from}.",
+    successBirthday: "Chúc mừng sinh nhật, {name}! ✨\nHôm nay bạn được tặng ${amount} quà sinh nhật.\nHãy thư giãn và để chúng tôi chăm sóc bạn.",
+    successWelcomeReferral: "Chào mừng, {name}! ✨\n{referral}\nChúc bạn có một buổi làm đẹp vui vẻ.",
+    successWelcomeBackReferral: "Chào mừng trở lại, {name}! ✨\n{referral}\nChúc bạn tận hưởng dịch vụ của tiệm.",
+    successRewardUnlocked: "Chúc mừng, {name}! ✨\nBạn đã nhận được ưu đãi giới thiệu {percent}% và đã được áp dụng hôm nay.\nCảm ơn bạn đã chia sẻ với mọi người.",
+    successCode: "Bạn vừa mở khóa phần thưởng đặc biệt, {name}! ✨\nMã giới thiệu của bạn là {code}.\nHãy chia sẻ cho bạn bè để họ được giảm 10%.",
+    thankYouNew: "Bạn đã check-in cho: {services}. Vui lòng ngồi chờ và thư giãn. Thợ sẽ đến với bạn ngay.",
+    thankYouExisting: "Cảm ơn bạn đã check-in cho: {services}. Vui lòng ngồi chờ và tận hưởng dịch vụ.",
+    profileUpdated: "Đã cập nhật thông tin thành công, {name}. Ưu đãi, mã giới thiệu, quà sinh nhật và lịch sử đều giữ nguyên trên cùng một tài khoản.",
+    slide1Badge: "Thưởng Giới Thiệu", slide1Title: "Giảm 10% Khi Có Mã Giới Thiệu", slide1Text: "Dùng mã giới thiệu hợp lệ để được giảm 10% dịch vụ.",
+    slide2Badge: "Đặc Biệt Sinh Nhật", slide2Title: "Quà Sinh Nhật", slide2Text: "Mừng sinh nhật với ưu đãi giảm $10 vào ngày sinh nhật của bạn.",
+    slide3Badge: "Ưu Đãi Tiệm", slide3Title: "Tận Hưởng Ưu Đãi Độc Quyền", slide3Text: "Ghé tiệm thường xuyên để mở khóa thêm nhiều ưu đãi và quyền lợi giới thiệu.",
+    slide4Badge: "Thư Giãn & Tận Hưởng", slide4Title: "Check-In Và Thư Giãn", slide4Text: "Check-in nhanh chóng, ngồi chờ và tận hưởng trải nghiệm thư giãn."
+  },
+
+
+  es: {
+    salon: "SALÓN DE UÑAS",
+    welcome: "Bienvenido al Salón de Uñas",
+    heroSubtitle:
+      "¡Bienvenido! Regístrese a continuación para que podamos atenderle lo antes posible y hacer que disfrute de su visita.",
+
+    todayOrder: "Orden de Registro de Hoy",
+    todayOrderSubtitle:
+      "Los clientes aparecen en el orden en que se registraron.",
+    noCustomers: "Aún no hay clientes registrados.",
+
+    checkIn: "Registrarse",
+    enterPhone: "Ingrese su número de teléfono para continuar",
+    continue: "Continuar",
+
+    newCustomer: "Cliente Nuevo",
+    completeInfo: "Complete su información",
+
+    fullName: "Nombre Completo",
+    emailOptional: "Correo electrónico (opcional)",
+    referralOptional: "Código de referido (opcional)",
+    existingReferralOptional: "Ingrese código de referido (opcional)",
+
+    selectServices: "Seleccionar Servicios",
+    chooseServices: "Seleccione sus servicios a continuación.",
+    searchServices: "Buscar servicios",
+    back: "Atrás",
+    reviewInformation: "Revisar Información",
+
+    reviewTitle: "Revise Su Información",
+    checkInformation:
+      "Revise su información antes de continuar.",
+
+    name: "Nombre",
+    phone: "Teléfono",
+    email: "Correo Electrónico",
+    birthday: "Fecha de Nacimiento",
+    referral: "Referido",
+    services: "Servicios",
+
+    edit: "Editar",
+
+    returningCustomer: "Cliente Existente",
+    updateProfile: "Actualizar Perfil",
+
+    editInformation: "Edite su información a continuación.",
+    phoneNumber: "Número de Teléfono",
+    save: "Guardar",
+    cancel: "Cancelar",
+
+    thankYou: "¡Gracias!",
+    checkedInRelax:
+      "Ya está registrado. Tome asiento y relájese.",
+    backHome: "Volver al Inicio",
+
+    happyBirthday: "¡Feliz Cumpleaños!",
+    birthdayTen: "Hoy tiene $10 de descuento.",
+    awesome: "Excelente",
+
+    checkedIn: "Ya Está Registrado",
+    welcomeRelax:
+      "¡Bienvenido! Relájese y disfrute su visita.",
+    lovely: "Perfecto",
+
+    specialOffer: "Oferta Especial",
+    salonRewards: "Recompensas del Salón",
+    salonRewardsText:
+      "Visítenos con frecuencia y disfrute beneficios exclusivos.",
+
+    promoDisclaimer:
+      "Las imágenes y ofertas promocionales son solo para publicidad.",
+
+    notProvided: "No proporcionado",
+    noServicesSelected: "No se seleccionaron servicios",
+    noMatchingServices: "No se encontraron servicios.",
+    unableServices: "No se pudieron cargar los servicios.",
+    unableQueue: "No se pudo cargar la lista de registro.",
+
+    invalidPhone: "Ingrese un número de teléfono válido de 10 dígitos.",
+    checkingPhone: "Verificando número de teléfono...",
+    selectOneService: "Seleccione al menos un servicio.",
+    savingCustomer: "Guardando cliente...",
+    processingCheckIn: "Procesando registro...",
+    nameRequired: "El nombre es obligatorio.",
+    phoneTenDigits: "El número de teléfono debe tener exactamente 10 dígitos.",
+    updatingProfile: "Actualizando perfil...",
+
+    dobRequired: "Ingrese su fecha de nacimiento.",
+    dobInvalid: "Ingrese una fecha de nacimiento válida con año de 4 dígitos.",
+    welcomeBack: "Bienvenido de nuevo, {name}",
+    alreadyCheckedIn: "{name} ya se registró hoy.",
+    referralApplied: "Recibió {percent}% de descuento hoy como recompensa de referido de {from}.",
+    successBirthday: "¡Feliz cumpleaños, {name}! ✨\nDisfrute de ${amount} de regalo de cumpleaños hoy.\nRelájese y permítanos cuidarle.",
+    successWelcomeReferral: "¡Bienvenido, {name}! ✨\n{referral}\nDisfrute su visita.",
+    successWelcomeBackReferral: "¡Bienvenido de nuevo, {name}! ✨\n{referral}\nDisfrute su experiencia en el salón.",
+    successRewardUnlocked: "¡Felicidades, {name}! ✨\nSu recompensa de referido de {percent}% fue desbloqueada y aplicada hoy.\nGracias por compartir con otros.",
+    successCode: "¡Ha desbloqueado una recompensa especial, {name}! ✨\nSu código de referido personal es {code}.\nCompártalo con amigos y dales 10% de descuento.",
+    thankYouNew: "Está registrado para: {services}. Tome asiento y relájese. Un técnico lo atenderá en breve.",
+    thankYouExisting: "Gracias por registrarse para: {services}. Tome asiento y disfrute su experiencia en el salón.",
+    profileUpdated: "Perfil actualizado con éxito, {name}. Sus recompensas, código de referido, beneficios de cumpleaños e historial se mantienen en la misma cuenta.",
+    slide1Badge: "Recompensa por Referido", slide1Title: "10% de Descuento con Referido", slide1Text: "Use un código de referido válido y disfrute 10% de descuento en sus servicios.",
+    slide2Badge: "Especial de Cumpleaños", slide2Title: "Regalo de Cumpleaños", slide2Text: "Celebre su cumpleaños con $10 de descuento especial.",
+    slide3Badge: "Recompensas del Salón", slide3Title: "Disfrute Beneficios Exclusivos", slide3Text: "Visítenos con más frecuencia y desbloquee recompensas y beneficios por referidos.",
+    slide4Badge: "Relájese y Disfrute", slide4Title: "Regístrese y Relájese", slide4Text: "Regístrese rápido, tome asiento y disfrute una experiencia relajante."
+  }
+};
+
+
+function t(key) {
+  return translations[currentLanguage]?.[key]
+    || translations.en[key]
+    || key;
+}
+
+
+function setText(selector, key) {
+  const element = document.querySelector(selector);
+
+  if (element) {
+    element.textContent = t(key);
+  }
+}
+
+
+function setPlaceholder(selector, key) {
+  const element = document.querySelector(selector);
+
+  if (element) {
+    element.placeholder = t(key);
+  }
+}
+
+
+// Re-translates whatever dynamic content is currently on screen
+function refreshDynamicScreens() {
+  if (existingCustomer) {
+    existingCustomerName.textContent = tf("welcomeBack", { name: existingCustomer.full_name });
+    renderExistingCustomerProfile(existingCustomer);
+  }
+
+  if (newCustomerReviewScreen.style.display === "block" && pendingNewCustomerPayload) {
+    showNewCustomerReview(pendingNewCustomerPayload);
+  }
+
+  if (existingCustomerReviewScreen.style.display === "block") {
+    showExistingCustomerReview();
+  }
+
+  if (thankYouScreen.style.display === "block" && lastThankYou) {
+    thankYouMessage.textContent = tf(lastThankYou.key, {
+      services: formatServiceNamesFromIds(lastThankYou.ids)
+    });
+  }
+}
+
+
+function applyLanguage(lang) {
+  if (!translations[lang]) {
+    lang = "en";
+  }
+
+  currentLanguage = lang;
+
+  localStorage.setItem("nailSalonLanguage", lang);
+
+  document.documentElement.lang = lang;
+
+
+  // Header
+
+  setText(".brand", "salon");
+  setText(".hero h1", "welcome");
+  setText(".hero-subtitle", "heroSubtitle");
+
+  setText(".promo-disclaimer", "promoDisclaimer");
+
+
+  // Queue
+
+  const queueCard = document.querySelector(".queue-card");
+
+  if (queueCard) {
+    const heading = queueCard.querySelector("h2");
+    const subtitle = queueCard.querySelector(".subtitle");
+
+    if (heading) heading.textContent = t("todayOrder");
+    if (subtitle) subtitle.textContent = t("todayOrderSubtitle");
+  }
+
+
+  // Phone screen
+
+  const phoneHeading = phoneScreen?.querySelector("h2");
+  const phoneSubtitle = phoneScreen?.querySelector(".subtitle");
+  const phoneButton = phoneForm?.querySelector('button[type="submit"]');
+
+  if (phoneHeading) phoneHeading.textContent = t("checkIn");
+  if (phoneSubtitle) phoneSubtitle.textContent = t("enterPhone");
+  if (phoneButton) phoneButton.textContent = t("continue");
+
+
+  // New customer
+
+  const newHeading = formScreen?.querySelector("h2");
+  const newSubtitle = formScreen?.querySelector(".subtitle");
+  const newContinue = customerForm?.querySelector('button[type="submit"]');
+
+  if (newHeading) newHeading.textContent = t("newCustomer");
+  if (newSubtitle) newSubtitle.textContent = t("completeInfo");
+  if (newContinue) newContinue.textContent = t("continue");
+
+  setPlaceholder('#new-customer-form input[name="full_name"]', "fullName");
+  setPlaceholder('#new-customer-form input[name="email"]', "emailOptional");
+  setPlaceholder('#new-customer-form input[name="referral_code"]', "referralOptional");
+
+
+  // Service screens
+
+  [newCustomerServiceScreen, existingCustomerServiceScreen]
+    .forEach(screen => {
+      if (!screen) return;
+
+      const heading = screen.querySelector("h2");
+      const subtitle = screen.querySelector(".subtitle");
+
+      if (heading) heading.textContent = t("selectServices");
+      if (subtitle) subtitle.textContent = t("chooseServices");
+    });
+
+
+  setPlaceholder("#new-service-search", "searchServices");
+  setPlaceholder("#existing-service-search", "searchServices");
+
+
+  if (backToNewCustomerFormBtn) {
+    backToNewCustomerFormBtn.textContent = t("back");
+  }
+
+  if (continueToNewReviewBtn) {
+    continueToNewReviewBtn.textContent = t("reviewInformation");
+  }
+
+  if (backToExistingCustomerBtn) {
+    backToExistingCustomerBtn.textContent = t("back");
+  }
+
+  if (continueToExistingReviewBtn) {
+    continueToExistingReviewBtn.textContent = t("reviewInformation");
+  }
+
+
+  // Review screens
+
+  [newCustomerReviewScreen, existingCustomerReviewScreen]
+    .forEach(screen => {
+      if (!screen) return;
+
+      const heading = screen.querySelector("h2");
+      const subtitle = screen.querySelector(".subtitle");
+      const reminder = screen.querySelector(".reminder-box");
+
+      if (heading) heading.textContent = t("reviewTitle");
+      if (subtitle) subtitle.textContent = t("checkInformation");
+      if (reminder) reminder.textContent = t("checkInformation");
+    });
+
+
+  const newLabels = newCustomerReviewScreen?.querySelectorAll(".profile-label");
+
+  if (newLabels?.length >= 5) {
+    newLabels[0].textContent = t("name");
+    newLabels[1].textContent = t("birthday");
+    newLabels[2].textContent = t("email");
+    newLabels[3].textContent = t("referral");
+    newLabels[4].textContent = t("services");
+  }
+
+
+  const existingLabels = existingCustomerReviewScreen?.querySelectorAll(".profile-label");
+
+  if (existingLabels?.length >= 5) {
+    existingLabels[0].textContent = t("name");
+    existingLabels[1].textContent = t("phone");
+    existingLabels[2].textContent = t("email");
+    existingLabels[3].textContent = t("referral");
+    existingLabels[4].textContent = t("services");
+  }
+
+
+  if (editNewCustomerBtn) {
+    editNewCustomerBtn.textContent = t("edit");
+  }
+
+  if (confirmNewCustomerBtn) {
+    confirmNewCustomerBtn.textContent = t("continue");
+  }
+
+  if (editExistingCustomerBtn) {
+    editExistingCustomerBtn.textContent = t("edit");
+  }
+
+  if (confirmExistingCustomerBtn) {
+    confirmExistingCustomerBtn.textContent = t("checkIn");
+  }
+
+
+  // Returning customer
+
+  const existingHeading = existingScreen?.querySelector("h2");
+
+  if (existingHeading) {
+    existingHeading.textContent = t("returningCustomer");
+  }
+
+  setPlaceholder("#existing_referral_code", "existingReferralOptional");
+
+  const existingContinue = existingCustomerForm?.querySelector('button[type="submit"]');
+
+  if (existingContinue) {
+    existingContinue.textContent = t("continue");
+  }
+
+  if (updateProfileBtn) {
+    updateProfileBtn.textContent = t("updateProfile");
+  }
+
+
+  // Update profile
+
+  const updateHeading = updateProfileScreen?.querySelector("h2");
+  const updateSubtitle = updateProfileScreen?.querySelector(".subtitle");
+
+  if (updateHeading) {
+    updateHeading.textContent = t("updateProfile");
+  }
+
+  if (updateSubtitle) {
+    updateSubtitle.textContent = t("editInformation");
+  }
+
+  setPlaceholder("#update_full_name", "fullName");
+  setPlaceholder("#update_phone", "phoneNumber");
+  setPlaceholder("#update_email", "emailOptional");
+
+  const saveButton = updateProfileForm?.querySelector('button[type="submit"]');
+
+  if (saveButton) {
+    saveButton.textContent = t("save");
+  }
+
+  if (cancelUpdateProfileBtn) {
+    cancelUpdateProfileBtn.textContent = t("cancel");
+  }
+
+
+  // Thank you
+
+  const thankHeading = thankYouScreen?.querySelector("h2");
+
+  if (thankHeading) {
+    thankHeading.textContent = t("thankYou");
+  }
+
+  if (backHomeBtn) {
+    backHomeBtn.textContent = t("backHome");
+  }
+
+
+  // Birthday modal
+
+  const birthdayHeading = birthdayModal?.querySelector("h2");
+
+  if (birthdayHeading) {
+    birthdayHeading.textContent = t("happyBirthday");
+  }
+
+  if (closeBirthdayModalBtn) {
+    closeBirthdayModalBtn.textContent = t("awesome");
+  }
+
+
+  // Success modal
+
+  const successHeading = successModal?.querySelector("h2");
+
+  if (successHeading) {
+    successHeading.textContent = t("checkedIn");
+  }
+
+  if (closeSuccessModalBtn) {
+    closeSuccessModalBtn.textContent = t("lovely");
+  }
+
+  renderServiceList(
+    newServiceList,
+    selectedNewServiceIds,
+    newServiceSearchInput?.value || ""
+  );
+
+  renderServiceList(
+    existingServiceList,
+    selectedExistingServiceIds,
+    existingServiceSearchInput?.value || ""
+  );
+
+  renderSlide(carouselIndex);
+  refreshDynamicScreens();
+  loadTodayCheckInOrder();
+}
+
+const languageToggle = document.getElementById("language-toggle");
+const languageDropdown = document.getElementById("language-dropdown");
+
+const languageLabels = {
+  en: "🌐 EN",
+  vi: "🌐 VI",
+  es: "🌐 ES"
+};
+
+if (languageToggle && languageDropdown) {
+
+  languageToggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    languageDropdown.classList.toggle("hidden");
+  });
+
+  document.querySelectorAll(".language-option").forEach(button => {
+
+    button.addEventListener("click", () => {
+
+      const lang = button.dataset.lang;
+
+      applyLanguage(lang);
+
+      languageToggle.textContent = languageLabels[lang];
+
+      languageDropdown.classList.add("hidden");
+    });
+
+  });
+
+  document.addEventListener("click", (event) => {
+
+    if (!event.target.closest(".language-menu")) {
+      languageDropdown.classList.add("hidden");
+    }
+
+  });
+
+}
+
+if (languageToggle) {
+  languageToggle.textContent =
+    languageLabels[currentLanguage] || "🌐 EN";
+}
+
 // ── Init ──────────────────────────────────────────────────────
+
+applyLanguage(currentLanguage);
 
 startCarousel();
 loadTodayCheckInOrder();
 loadServices();
+
 setInterval(loadTodayCheckInOrder, 10000);

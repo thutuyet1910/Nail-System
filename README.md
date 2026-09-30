@@ -2,7 +2,7 @@
 
 Customer-facing check-in system for a nail salon. Customers enter their phone number, create or update their profile, select services, receive eligible rewards, and join the same-day live check-in queue.
 
-This system is designed to work with the owner dashboard in `Nail-System-complete`.
+This system is designed to work with the owner dashboard in `Nail-System-owner-dashboard-update`.
 
 ## What This System Does
 
@@ -54,15 +54,17 @@ Nail-System-main/
 Open a terminal in:
 
 ```text
-C:\Users\Flying Phoenix PCs\source\repos\Nail-System-main\Nail-System-main\backend
+cd backend
 ```
 
 Then run:
 
 ```powershell
-venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python -m uvicorn app.main:app --reload --port 8000
+py -m venv venv
+venv\Scripts\Activate
+python.exe -m pip install --upgrade pip
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
 ```
 
 Backend URLs:
@@ -75,7 +77,7 @@ Backend URLs:
 Open:
 
 ```text
-frontend\index.html
+start ../frontend\index.html
 ```
 
 You can open it directly in a browser or use VS Code Live Server.
@@ -85,7 +87,6 @@ You can open it directly in a browser or use VS Code Live Server.
 Open a terminal in the check-in backend folder and run:
 
 ```powershell
-venv\Scripts\Activate.ps1
 python -m pytest app\test_main.py -q
 ```
 
@@ -129,3 +130,9 @@ Current expected result:
 - Backend API dates are stored in ISO format.
 - The backend stores local SQLite data in `backend\nail_system.db`.
 - Test data uses `backend\test_checkin.db`.
+
+
+## Upgrade
+
+1. Phone / SMS Integration
+2. PostgreSQL Database
