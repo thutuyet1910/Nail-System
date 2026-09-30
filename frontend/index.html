@@ -65,6 +65,22 @@
         </section>
       </section>
 
+      <!-- Owner PIN modal -->
+      <div id="pinModal" class="cute-notification hidden">
+        <div class="cute-notification-card">
+          <div class="cute-notification-icon">✦</div>
+          <h4>Owner PIN</h4>
+          <p>Enter the PIN to continue.</p>
+          <div class="appointment-modal-content">
+            <input type="password" id="pinInput" inputmode="numeric" maxlength="12" placeholder="PIN" autocomplete="off" />
+          </div>
+          <div class="appointment-modal-actions">
+            <button type="button" id="pinCancelBtn" class="cute-notification-btn cute-btn-light">Cancel</button>
+            <button type="button" id="pinOkBtn" class="cute-notification-btn">Unlock</button>
+          </div>
+        </div>
+      </div>
+
       <!-- CUSTOMER LIST VIEW -->
       <section id="customerListView" class="view">
         <header class="topbar">
@@ -72,7 +88,7 @@
             <h2>Live Check-In Queue</h2>
             <p class="subtitle">View and manage waiting customers</p>
           </div>
-          <button class="back-btn">← Back</button>
+          <button class="back-btn icon-btn"><span data-icon="arrowLeft"></span>Back</button>
         </header>
 
         <div class="form-card queue-section-card">
@@ -82,40 +98,58 @@
           <div id="liveCheckinQueue" class="tech-cards"></div>
 
           <div class="live-queue-footer">
-            <button type="button" id="queueAutoAssignBtn" class="primary-btn queue-auto-assign-btn">
-              Auto Assign
+            <button type="button" id="queueAutoAssignBtn" class="primary-btn queue-auto-assign-btn icon-btn">
+              <span data-icon="wand"></span>Auto Assign
             </button>
           </div>
         </div>
 
         <div class="form-card history-section-card">
           <div class="section-header">
-            <h3 class="assigned-section-title">Salon History - Checked-Out Today</h3>
-            <button type="button" id="checkoutHistoryAllBtn" class="ghost-btn">Check-Out History</button>
+            <h3>Salon History - Checked-Out Today</h3>
+            <button type="button" id="checkoutHistoryAllBtn" class="ghost-btn icon-btn history-all-btn">
+              <span data-icon="clock"></span>Check-Out History
+            </button>
           </div>
+
           <div class="history-range-card">
-            <div class="toolbar-filters income-filters income-range-filters">
+            <div class="history-range-row">
               <div>
                 <label for="saleHistoryRangeType">History Range</label>
-                <select id="saleHistoryRangeType">
-                  <option value="date">Date</option>
-                  <option value="week">Week</option>
-                  <option value="year">Year</option>
-                </select>
+                <div class="input-icon">
+                  <span data-icon="calendar"></span>
+                  <select id="saleHistoryRangeType">
+                    <option value="date">Date</option>
+                    <option value="week">Week</option>
+                    <option value="year">Year</option>
+                  </select>
+                </div>
               </div>
+
               <div>
                 <label for="saleHistoryRangeStart">Start</label>
-                <input type="text" id="saleHistoryRangeStart" placeholder="MM-DD-YYYY" inputmode="numeric" maxlength="10" pattern="\d{2}-\d{2}-\d{4}" data-date-mask="true" />
+                <div class="input-icon">
+                  <span data-icon="calendar"></span>
+                  <input type="text" id="saleHistoryRangeStart" placeholder="MM-DD-YYYY" inputmode="numeric" maxlength="10" pattern="\d{2}-\d{2}-\d{4}" data-date-mask="true" />
+                </div>
               </div>
+
               <div>
                 <label for="saleHistoryRangeEnd">End</label>
-                <input type="text" id="saleHistoryRangeEnd" placeholder="MM-DD-YYYY" inputmode="numeric" maxlength="10" pattern="\d{2}-\d{2}-\d{4}" data-date-mask="true" />
+                <div class="input-icon">
+                  <span data-icon="calendar"></span>
+                  <input type="text" id="saleHistoryRangeEnd" placeholder="MM-DD-YYYY" inputmode="numeric" maxlength="10" pattern="\d{2}-\d{2}-\d{4}" data-date-mask="true" />
+                </div>
               </div>
-              <div class="income-action-cell">
-                <button type="button" id="loadSaleHistoryRangeBtn" class="primary-btn">Review Range</button>
+
+              <div>
+                <button type="button" id="loadSaleHistoryRangeBtn" class="primary-btn icon-btn">
+                  <span data-icon="search"></span>Review Range
+                </button>
               </div>
             </div>
           </div>
+
           <div id="checkoutHistoryList" class="tech-cards"></div>
         </div>
       </section>
@@ -587,7 +621,7 @@
                   <div class="specialty-actions specialty-actions-vertical">
                     <input type="text" id="new_specialty_input" placeholder="Add new service group" />
                     <button type="button" id="addSpecialtyBtn" class="mini-btn">Add</button>
-                    <button type="button" id="deleteSpecialtyBtn" class="mini-btn danger-mini-btn">Delete Checked</button>
+                    <button type="button" id="deleteSpecialtyBtn" class="mini-btn danger-mini-btn">Delete</button>
                   </div>
                 </div>
               </div>

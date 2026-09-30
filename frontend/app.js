@@ -10,7 +10,6 @@ const checkoutView = document.getElementById("checkoutView");
 const techIncomeView = document.getElementById("techIncomeView");
 const salonIncomeView = document.getElementById("salonIncomeView");
 
-
 const navCustomerList = document.getElementById("navCustomerList");
 const navTechnician = document.getElementById("navTechnician");
 const navAppointment = document.getElementById("navAppointment");
@@ -342,6 +341,32 @@ function getScheduleDisplayText(workSchedule) {
     }
 }
 
+const TECH_ICONS = {
+    calendar: `<svg class="tech-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="3"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>`,
+    clock: `<svg class="tech-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`,
+    edit: `<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg>`,
+    trash: `<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 10v6M14 10v6"/></svg>`,
+    ban: `<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg>`,
+};
+
+const uiIcon = (paths) =>
+    `<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+
+const UI_ICONS = {
+    phone: uiIcon(`<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>`),
+    clock: uiIcon(`<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>`),
+    calendar: uiIcon(`<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>`),
+    user: uiIcon(`<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>`),
+    check: uiIcon(`<polyline points="20 6 9 17 4 12"/>`),
+    search: uiIcon(`<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>`),
+    arrowLeft: uiIcon(`<line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>`),
+    wand: uiIcon(`<path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/><path d="M10 2v2"/><path d="M7 8H3"/><path d="M21 16h-4"/><path d="M11 3H9"/>`),
+};
+
+
+document.querySelectorAll("[data-icon]").forEach((el) => {
+    el.innerHTML = UI_ICONS[el.dataset.icon] || "";
+});
 
 const techSearch = document.getElementById("techSearch");
 const techFilterSpecialty = document.getElementById("techFilterSpecialty");
@@ -491,7 +516,50 @@ function showView(view) {
     }
 }
 
+// ── Owner PIN gate ─────────────────────────────────────────────────
+const OWNER_PIN = "1234";
+
+function askPin() {
+    return new Promise((resolve) => {
+        const modal = document.getElementById("pinModal");
+        const input = document.getElementById("pinInput");
+        const okBtn = document.getElementById("pinOkBtn");
+        const cancelBtn = document.getElementById("pinCancelBtn");
+
+        const finish = (value) => {
+            modal.classList.add("hidden");
+            input.value = "";
+            resolve(value);
+        };
+
+        input.value = "";
+        modal.classList.remove("hidden");
+        input.focus();
+
+        okBtn.onclick = () => finish(input.value);
+        cancelBtn.onclick = () => finish(null);
+        input.onkeydown = (e) => {
+            if (e.key === "Enter") finish(input.value);
+            if (e.key === "Escape") finish(null);
+        };
+    });
+}
+
+async function requireOwner() {
+    const entered = await askPin();
+    if (entered === null) return false;
+
+    if (entered !== OWNER_PIN) {
+        showCuteNotification("Incorrect PIN.", "Oops");
+        return false;
+    }
+
+    return true;
+}
+
+
 navInventory?.addEventListener("click", async () => {
+    if (!(await requireOwner())) return;
     await renderInventory();
     showView("inventory");
 });
@@ -516,6 +584,7 @@ navCustomerList?.addEventListener("click", async () => {
     showView("customerList");
 });
 navTechnician?.addEventListener("click", async () => {
+    if (!(await requireOwner())) return;
     await loadTechnicians();
     renderScheduleBoard();
     showView("technician");
@@ -529,6 +598,7 @@ navAppointment?.addEventListener("click", async () => {
 });
 
 navTechIncome?.addEventListener("click", async () => {
+    if (!(await requireOwner())) return;
     setupIncomeDateDefaults();
     await loadTechniciansRaw();
     populateTechIncomeTechnicianDropdown();
@@ -537,6 +607,7 @@ navTechIncome?.addEventListener("click", async () => {
 });
 
 navSalonIncome?.addEventListener("click", async () => {
+    if (!(await requireOwner())) return;
     setupIncomeDateDefaults();
     await loadSalonIncome();
     showView("salonIncome");
@@ -549,6 +620,24 @@ loadSaleHistoryRangeBtn?.addEventListener("click", loadSaleHistoryRange);
 checkoutHistoryAllBtn?.addEventListener("click", loadAllCheckoutHistory);
 techIncomeRangeType?.addEventListener("change", () => setupRangeInputs(techIncomeRangeType, techIncomeRangeStart, techIncomeRangeEnd));
 saleHistoryRangeType?.addEventListener("change", () => setupRangeInputs(saleHistoryRangeType, saleHistoryRangeStart, saleHistoryRangeEnd));
+
+const OWNER_VIEWS = ["technicianView", "inventoryView", "techIncomeView", "salonIncomeView"];
+let lastActivity = Date.now();
+
+["click", "keydown", "mousemove", "touchstart"].forEach((evt) => {
+    document.addEventListener(evt, () => {
+        lastActivity = Date.now();
+    });
+});
+
+setInterval(() => {
+    const onOwnerPage = OWNER_VIEWS.some((id) =>
+        document.getElementById(id)?.classList.contains("active-view")
+    );
+    if (onOwnerPage && Date.now() - lastActivity > 2 * 60 * 1000) {
+        showView("calendar");
+    }
+}, 10000);
 
 document.querySelectorAll(".back-btn").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -2087,25 +2176,22 @@ function renderCheckoutHistoryList(bounds = null) {
     }
 
     checkoutHistoryList.innerHTML = checkoutHistory.map((checkout) => `
-      <div class="tech-card dispatch-card checkout-history-card">
-        <div class="tech-card-top">
-          <div class="tech-avatar-wrap">
-            <div class="tech-avatar-fallback">${getInitials(checkout.customer_name)}</div>
-          </div>
-          <div class="tech-main-info">
-            <div class="tech-title-row">
+      <div class="tech-card history-card">
+        <div class="person-row">
+          <div class="person-avatar">${escapeHtml(getInitials(checkout.customer_name))}</div>
+          <div class="person-info">
+            <div class="person-title">
               <h4>${escapeHtml(checkout.customer_name)}</h4>
-              <span class="status-chip dispatch-status-done">checked out</span>
+              <span class="status-chip chip-checked-out">${UI_ICONS.check}Checked Out</span>
             </div>
-            <p class="tech-subtext">Phone: ${escapeHtml(checkout.customer_phone || "-")}</p>
-            <p class="tech-subtext">Completed: ${formatDateTime(checkout.created_at)}</p>
+            <p class="person-line">${UI_ICONS.phone}<span>${escapeHtml(checkout.customer_phone || "-")}</span></p>
+            <p class="person-line">${UI_ICONS.calendar}<span>Completed: ${formatDateTime(checkout.created_at)}</span></p>
           </div>
         </div>
-        <div class="tech-meta">
-          <p><strong>Technician:</strong> ${escapeHtml(getTechnicianNameById(checkout.technician_id))}</p>
-          <p><strong>Service:</strong> ${escapeHtml(checkout.service_name || "-")}</p>
-          <p><strong>Paid:</strong> ${formatMoney(checkout.customer_pays)} | <strong>Technician Tip:</strong> ${formatMoney(checkout.tip_amount)}</p>
-        </div>
+        <div class="person-divider"></div>
+        <p class="person-detail"><strong>Technician:</strong><span>${escapeHtml(getTechnicianNameById(checkout.technician_id))}</span></p>
+        <p class="person-detail"><strong>Service:</strong><span>${escapeHtml(checkout.service_name || "-")}</span></p>
+        <p class="person-detail-inline"><strong>Paid:</strong> ${formatMoney(checkout.customer_pays)}<span class="person-sep">|</span><strong>Technician Tip:</strong> ${formatMoney(checkout.tip_amount)}</p>
       </div>`).join("");
 }
 
@@ -2470,28 +2556,21 @@ function renderLiveCheckinQueue(checkins) {
       </div>`;
     } else {
         liveCheckinQueue.innerHTML = waitingCheckins.map((item) => `
-      <div class="tech-card dispatch-card">
-        <div class="tech-card-top">
-          <div class="tech-avatar-wrap">
-            <div class="tech-avatar-fallback">${getInitials(item.full_name)}</div>
-          </div>
-          <div class="tech-main-info">
-            <div class="tech-title-row">
-              <h4>#${item.position} ${item.full_name}</h4>
+      <div class="tech-card queue-card">
+        <div class="person-row">
+          <div class="person-avatar">${escapeHtml((item.full_name || "?").trim().charAt(0).toUpperCase())}</div>
+          <div class="person-info">
+            <div class="person-title">
+              <h4>#${item.position} ${escapeHtml(item.full_name)}</h4>
               <span class="status-chip dispatch-status-waiting">waiting</span>
             </div>
-            <p class="tech-subtext">Phone: ${item.phone_number || "-"}</p>
-            <p class="tech-subtext">Checked in: ${formatLiveCheckinTime(item.checked_in_at)}</p>
+            <p class="person-line">${UI_ICONS.phone}<span>${escapeHtml(item.phone_number || "-")}</span></p>
+            <p class="person-line">${UI_ICONS.clock}<span>Checked in: ${formatLiveCheckinTime(item.checked_in_at)}</span></p>
           </div>
         </div>
-        <div class="tech-meta">
-          <p><strong>Services:</strong> ${(item.services || []).join(", ") || "-"}</p>
-        </div>
-        <div class="dispatch-card-center">
-          <button class="mini-btn queue-preferred-btn" data-name="${item.full_name}" data-phone="${item.phone_number}">
-            Assign Preferred
-          </button>
-        </div>
+        <div class="person-divider"></div>
+        <p class="person-detail"><strong>Services:</strong><span>${escapeHtml((item.services || []).join(", ") || "-")}</span></p>
+        <button class="mini-btn assign-btn queue-preferred-btn" data-name="${escapeHtml(item.full_name)}" data-phone="${escapeHtml(item.phone_number)}">${UI_ICONS.user}Assign Preferred</button>
       </div>`).join("");
 
         liveCheckinQueue.querySelectorAll(".queue-preferred-btn").forEach((btn) => {
@@ -2841,19 +2920,6 @@ function getSpecialtyItems(specialties) {
         .filter(Boolean);
 }
 
-function renderSpecialtyButton(tech) {
-    const items = getSpecialtyItems(tech.specialties);
-    const count = items.length;
-
-    if (!count) return `<span class="tech-empty-value">No specialties</span>`;
-
-    return `
-      <button type="button" class="specialty-toggle-btn" data-id="${tech.id}">
-        View Specialties (${count})
-      </button>
-    `;
-}
-
 function renderTechnicianScheduleSummary(schedule) {
     return `<span class="tech-schedule-value">${escapeHtml(getScheduleDisplayText(schedule))}</span>`;
 }
@@ -3014,59 +3080,88 @@ function renderTechnicianCards() {
         card.className = "tech-card technician-card";
 
         card.innerHTML = `
-      <div class="tech-card-top">
-        <div class="tech-avatar-wrap">
-          ${getTechnicianAvatar(tech)}
+        <div class="tech-card-top">
+            <div class="tech-avatar-wrap">
+                ${getTechnicianAvatar(tech)}
+            </div>
+            <div class="tech-main-info">
+                <div class="tech-title-row">
+                    <h4>${escapeHtml(tech.full_name)}</h4>
+                    <span class="status-chip">${escapeHtml(tech.status || "-")}</span>
+                </div>
+            </div>
         </div>
 
-        <div class="tech-main-info">
-          <div class="tech-title-row">
-            <h4>${tech.full_name}</h4>
-            <span class="status-chip">${tech.status || "-"}</span>
-          </div>
-          <p class="tech-subtext">Phone: ${tech.phone || "-"}</p>
-        </div>
-      </div>
+        <div class="tech-popup">
+            <span class="availability-badge ${getBadgeClass(tech.availability)}">
+                ${escapeHtml(getAvailabilityDisplayText(tech.availability))}
+            </span>
 
-      <div class="tech-meta">
-        <div class="tech-meta-row tech-meta-wide">
-          <strong>Specialties</strong>
-          ${renderSpecialtyButton(tech)}
-        </div>
-        <div class="tech-meta-row">
-          <strong>Start Date</strong>
-          <span>${tech.start_date ? isoToDisplayDate(tech.start_date) : "-"}</span>
-        </div>
-        <div class="tech-meta-row tech-meta-wide">
-          <strong>Schedule</strong>
-          ${renderTechnicianScheduleSummary(tech.work_schedule)}
-        </div>
-      </div>
+            <div class="tech-stats">
+                <div class="stat-box">
+                    <span class="stat-label">Today Appts</span>
+                    <strong>${tech.today_appointments_count || 0}</strong>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Today Turns</span>
+                    <strong>${tech.today_turns_count || 0}</strong>
+                </div>
+            </div>
 
-      <div class="tech-stats">
-        <div class="stat-box">
-          <span class="stat-label">Today Appts</span>
-          <strong>${tech.today_appointments_count || 0}</strong>
-        </div>
-        <div class="stat-box">
-          <span class="stat-label">Today Turns</span>
-          <strong>${tech.today_turns_count || 0}</strong>
-        </div>
-      </div>
+            <div class="tech-details">
+                <div class="tech-meta">
+                    <div class="tech-meta-row tech-meta-wide">
+                        <strong>Phone</strong>
+                        <span class="tech-phone">${escapeHtml(tech.phone || "-")}</span>
+                    </div>
+                    <div class="tech-meta-row tech-meta-wide">
+                        <strong>Specialties</strong>
+                        <div class="specialty-chips">
+                            ${getSpecialtyItems(tech.specialties).map((item) =>
+                                `<span class="specialty-chip">${escapeHtml(item)}</span>`
+                            ).join("") || `<span class="tech-empty-value">No specialties</span>`}
+                        </div>
+                    </div>
+                    <div class="tech-meta-row">
+                        <strong>Start Date</strong>
+                        <div class="tech-icon-line">
+                            ${TECH_ICONS.calendar}
+                            <span>${tech.start_date ? isoToDisplayDate(tech.start_date) : "-"}</span>
+                        </div>
+                    </div>
+                    <div class="tech-meta-row">
+                        <strong>Schedule</strong>
+                        <div class="tech-icon-line tech-icon-line-top">
+                            ${TECH_ICONS.clock}
+                            ${renderTechnicianScheduleSummary(tech.work_schedule)}
+                        </div>
+                    </div>
+                </div>
+            </div>
 
-      <div class="tech-badges">
-        <span class="availability-badge ${getBadgeClass(tech.availability)}">
-          ${getAvailabilityDisplayText(tech.availability)}
-        </span>
-      </div>
+            <div class="tech-actions">
+                <button class="ghost-btn tech-btn-edit tech-edit-btn" data-id="${tech.id}">${TECH_ICONS.edit}Edit</button>
+                <button class="ghost-btn tech-btn-delete tech-delete-btn" data-id="${tech.id}">${TECH_ICONS.trash}Delete</button>
+                <button class="ghost-btn tech-btn-schedule tech-schedule-btn" data-id="${tech.id}">${TECH_ICONS.calendar.replace("tech-icon", "btn-icon")}Schedule</button>
+                <button class="ghost-btn tech-btn-unavailable tech-unavailable-btn" data-id="${tech.id}">${TECH_ICONS.ban}Unavailable</button>
+            </div>
+        </div>
+        `;
 
-      <div class="tech-actions">
-        <button class="ghost-btn tech-edit-btn" data-id="${tech.id}">Edit</button>
-        <button class="ghost-btn tech-delete-btn" data-id="${tech.id}">Delete</button>
-        <button class="ghost-btn tech-schedule-btn" data-id="${tech.id}">Schedule</button>
-        <button class="ghost-btn tech-unavailable-btn" data-id="${tech.id}">Unavailable</button>
-      </div>
-    `;
+        card.addEventListener("mouseenter", () => {
+            const popup = card.querySelector(".tech-popup");
+            const rect = card.getBoundingClientRect();
+            const appRect = document.querySelector(".app").getBoundingClientRect();
+
+            card.classList.toggle("popup-right", rect.left + 340 > window.innerWidth - 16);
+            card.classList.toggle("popup-up", rect.bottom + popup.offsetHeight > appRect.bottom - 8);
+        });
+
+        
+        card.addEventListener("click", (e) => {
+            if (e.target.closest(".tech-popup")) return;
+            card.classList.toggle("expanded");
+        });
 
         technicianCards.appendChild(card);
     });
@@ -3123,15 +3218,6 @@ function renderTechnicianCards() {
             } catch (error) {
                 showCuteNotification("Could not load technician schedule.", "Oops");
             }
-        });
-    });
-
-    document.querySelectorAll(".specialty-toggle-btn").forEach((btn) => {
-        btn.addEventListener("click", () => {
-            const techId = Number(btn.dataset.id);
-            const tech = technicians.find((item) => Number(item.id) === techId);
-            const items = getSpecialtyItems(tech?.specialties);
-            showCuteNotification(items.map((item) => `- ${item}`).join("\n"), `${tech?.full_name || "Technician"} Specialties`);
         });
     });
 
