@@ -130,3 +130,9 @@ Current expected result:
 - Backend API dates are stored in ISO format.
 - The backend stores local SQLite data in `backend\nail_system.db`.
 - Test data uses `backend\test_checkin.db`.
+
+
+## Upgrade
+
+1. Phone / SMS Integration
+2. PostgreSQL Database
