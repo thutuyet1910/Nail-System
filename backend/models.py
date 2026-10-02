@@ -1,5 +1,6 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Date, DateTime, Text, ForeignKey, Numeric
+
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, true
 from sqlalchemy.orm import relationship
 
 from database import Base
@@ -13,7 +14,7 @@ class Technician(Base):
     full_name = Column(String, nullable=False, index=True)
     phone = Column(String, nullable=True)
     skills = Column(String, nullable=True)
-    specialties = Column(String, nullable=True)
+    specialties = Column(String, nullable=True)  # comma separated, e.g. "Acrylic, Gel"
     start_date = Column(Date, nullable=True)
 
     status = Column(String, nullable=False, default="off")
@@ -22,30 +23,28 @@ class Technician(Base):
     notes = Column(Text, nullable=True)
     profile_photo = Column(String, nullable=True)
 
+   
+    is_active = Column(Boolean, nullable=False, default=True, server_default=true())
+
     appointments = relationship(
         "Appointment",
         foreign_keys="Appointment.technician_id",
         back_populates="technician",
-        cascade="all, delete"
     )
-
     preferred_appointments = relationship(
         "Appointment",
         foreign_keys="Appointment.preferred_technician_id",
-        back_populates="preferred_technician"
+        back_populates="preferred_technician",
     )
-
     turns = relationship(
         "Turn",
         foreign_keys="Turn.technician_id",
         back_populates="technician",
-        cascade="all, delete"
     )
-
     preferred_turns = relationship(
         "Turn",
         foreign_keys="Turn.preferred_technician_id",
-        back_populates="preferred_technician"
+        back_populates="preferred_technician",
     )
 
 
@@ -62,12 +61,12 @@ class Appointment(Base):
     service_category = Column(String, nullable=False)
 
     appointment_time = Column(DateTime, nullable=False, index=True)
+    status = Column(String, nullable=False, default="scheduled", server_default="scheduled")
 
     customer_type = Column(String, nullable=False, default="new")
     note = Column(Text, nullable=True)
     special_requests = Column(Text, nullable=True)
     allergies = Column(Text, nullable=True)
-
     people_count = Column(Integer, nullable=False, default=1)
 
     created_at = Column(DateTime, nullable=False, default=datetime.now)
@@ -77,15 +76,10 @@ class Appointment(Base):
     preferred_technician_id = Column(Integer, ForeignKey("technicians.id"), nullable=True)
 
     technician = relationship(
-        "Technician",
-        foreign_keys=[technician_id],
-        back_populates="appointments"
+        "Technician", foreign_keys=[technician_id], back_populates="appointments"
     )
-
     preferred_technician = relationship(
-        "Technician",
-        foreign_keys=[preferred_technician_id],
-        back_populates="preferred_appointments"
+        "Technician", foreign_keys=[preferred_technician_id], back_populates="preferred_appointments"
     )
 
 
@@ -93,40 +87,34 @@ class Turn(Base):
     __tablename__ = "turns"
 
     id = Column(Integer, primary_key=True, index=True)
-    turn_number = Column(Integer, nullable=False)
-
-    discount_type = Column(String, nullable=True)
-    discount_value = Column(Numeric(10, 2), nullable=True, default=0)
-    discount_label = Column(String, nullable=True)
+    turn_number = Column(Integer, nullable=False)  
 
     customer_name = Column(String, nullable=False)
     customer_phone = Column(String, nullable=True)
     service_name = Column(String, nullable=False)
 
-    status = Column(String, nullable=False, default="waiting")
+    discount_type = Column(String, nullable=True)
+    discount_value = Column(Numeric(10, 2), nullable=True, default=0)
+    discount_label = Column(String, nullable=True)
+
+    status = Column(String, nullable=False, default="waiting", index=True)
     source = Column(String, nullable=False, default="checkin")
     assigned_by = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
 
-    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.now, index=True)
     assigned_at = Column(DateTime, nullable=True)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
 
-    technician_id = Column(Integer, ForeignKey("technicians.id"), nullable=False)
+    technician_id = Column(Integer, ForeignKey("technicians.id"), nullable=False, index=True)
     preferred_technician_id = Column(Integer, ForeignKey("technicians.id"), nullable=True)
 
-    technician = relationship(
-        "Technician",
-        foreign_keys=[technician_id],
-        back_populates="turns"
+    technician = relationship("Technician", foreign_keys=[technician_id], back_populates="turns")
+    preferred_technician = relationship(
+        "Technician", foreign_keys=[preferred_technician_id], back_populates="preferred_turns"
     )
 
-    preferred_technician = relationship(
-        "Technician",
-        foreign_keys=[preferred_technician_id],
-        back_populates="preferred_turns"
-    )
 
 class Checkout(Base):
     __tablename__ = "checkouts"
@@ -159,7 +147,7 @@ class Checkout(Base):
 
     note = Column(Text, nullable=True)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    created_at = Column(DateTime, nullable=False, default=datetime.now, index=True)
 
 
 class InventoryItem(Base):

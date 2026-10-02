@@ -1,52 +1,80 @@
-from datetime import datetime, date
-from typing import Optional
+from datetime import date, datetime
+from typing import Annotated, Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+
+
+TECHNICIAN_STATUSES = ("active", "off", "unavailable")
+TECHNICIAN_AVAILABILITY = ("available today", "on break", "busy", "off today")
+CUSTOMER_TYPES = ("new", "returning")
+APPOINTMENT_STATUSES = ("scheduled", "checked_in", "assigned", "in_service", "done", "cancelled")
+TURN_STATUSES = ("waiting", "assigned", "in_service", "done", "cancelled")
+TURN_SOURCES = ("checkin", "appointment", "manual")
+PAYMENT_METHODS = ("cash", "card", "zelle", "gift card")
+DISCOUNT_TYPES = ("none", "fixed", "percent")
+
+
+def _phone_check(label: str, allow_empty: bool):
+    def check(value):
+        if allow_empty and not value:
+            return value
+        if len("".join(ch for ch in (value or "") if ch.isdigit())) != 10:
+            raise ValueError(f"{label} must contain 10 digits")
+        return value
+
+    return check
+
+
+def _one_of(label: str, allowed: tuple):
+    def check(value):
+        if value not in allowed:
+            raise ValueError(f"{label} must be one of: {', '.join(allowed)}")
+        return value
+
+    return check
+
+
+def _check_availability(value):
+    if value and value.lower().startswith("date off:"):
+        return value
+    if value not in TECHNICIAN_AVAILABILITY:
+        raise ValueError(
+            f"Availability must be one of: {', '.join(TECHNICIAN_AVAILABILITY)}, or date off range"
+        )
+    return value
+
+
+TechnicianPhone = Annotated[Optional[str], AfterValidator(_phone_check("Phone number", True))]
+CustomerPhone = Annotated[str, AfterValidator(_phone_check("Customer phone number", False))]
+OptionalCustomerPhone = Annotated[Optional[str], AfterValidator(_phone_check("Customer phone number", True))]
+
+TechnicianStatus = Annotated[str, AfterValidator(_one_of("Status", TECHNICIAN_STATUSES))]
+Availability = Annotated[str, AfterValidator(_check_availability)]
+CustomerType = Annotated[str, AfterValidator(_one_of("Customer type", CUSTOMER_TYPES))]
+AppointmentStatus = Annotated[str, AfterValidator(_one_of("Appointment status", APPOINTMENT_STATUSES))]
+TurnStatus = Annotated[str, AfterValidator(_one_of("Turn status", TURN_STATUSES))]
+TurnSource = Annotated[str, AfterValidator(_one_of("Source", TURN_SOURCES))]
+PaymentMethod = Annotated[str, AfterValidator(_one_of("Payment method", PAYMENT_METHODS))]
+DiscountType = Annotated[str, AfterValidator(_one_of("Discount type", DISCOUNT_TYPES))]
+
+Money = Annotated[float, Field(ge=0)]  # money amounts can't be negative
 
 
 # ----------------------------
-# Technician Schemas
+# Technicians
 # ----------------------------
 class TechnicianBase(BaseModel):
     employee_id: Optional[str] = None
     full_name: str
-    phone: Optional[str] = None
+    phone: TechnicianPhone = None
     skills: Optional[str] = None
     specialties: Optional[str] = None
     start_date: Optional[date] = None
-    status: str = "off"
-    availability: str = "off today"
+    status: TechnicianStatus = "off"
+    availability: Availability = "off today"
     work_schedule: Optional[str] = None
     notes: Optional[str] = None
     profile_photo: Optional[str] = None
-
-    @field_validator("phone")
-    @classmethod
-    def validate_phone(cls, v):
-        if not v:
-            return v
-        digits = "".join(ch for ch in v if ch.isdigit())
-        if len(digits) != 10:
-            raise ValueError("Phone number must contain 10 digits")
-        return v
-
-    @field_validator("status")
-    @classmethod
-    def validate_status(cls, v):
-        allowed = {"active", "off", "unavailable"}
-        if v not in allowed:
-            raise ValueError("Status must be one of: active, off, unavailable")
-        return v
-
-    @field_validator("availability")
-    @classmethod
-    def validate_availability(cls, v):
-        if v and v.lower().startswith("date off:"):
-            return v
-        allowed = {"available today", "on break", "busy", "off today"}
-        if v not in allowed:
-            raise ValueError("Availability must be one of: available today, on break, busy, off today, or date off range")
-        return v
 
 
 class TechnicianCreate(TechnicianBase):
@@ -54,14 +82,16 @@ class TechnicianCreate(TechnicianBase):
 
 
 class TechnicianUpdate(BaseModel):
+    """Same rules as TechnicianBase, but every field is optional."""
+
     employee_id: Optional[str] = None
     full_name: Optional[str] = None
-    phone: Optional[str] = None
+    phone: TechnicianPhone = None
     skills: Optional[str] = None
     specialties: Optional[str] = None
     start_date: Optional[date] = None
-    status: Optional[str] = None
-    availability: Optional[str] = None
+    status: Optional[TechnicianStatus] = None
+    availability: Optional[Availability] = None
     work_schedule: Optional[str] = None
     notes: Optional[str] = None
     profile_photo: Optional[str] = None
@@ -69,6 +99,7 @@ class TechnicianUpdate(BaseModel):
 
 class TechnicianOut(TechnicianBase):
     id: int
+    is_active: bool = True
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -77,52 +108,26 @@ class TechnicianCardOut(TechnicianOut):
     today_appointments_count: int
     today_turns_count: int
 
-    model_config = ConfigDict(from_attributes=True)
-
 
 # ----------------------------
-# Appointment Schemas
+# Appointments
 # ----------------------------
 class AppointmentBase(BaseModel):
     customer_name: str
-    customer_phone: str
+    customer_phone: CustomerPhone
     service_category: str
     appointment_time: datetime
 
     service_name: Optional[str] = None
     appointment_code: Optional[str] = None
-    customer_type: str = "new"
+    customer_type: CustomerType = "new"
     note: Optional[str] = None
     special_requests: Optional[str] = None
     allergies: Optional[str] = None
     technician_id: Optional[int] = None
     preferred_technician_id: Optional[int] = None
-    people_count: int = 1
-    status: str = "scheduled"
-
-    @field_validator("customer_phone")
-    @classmethod
-    def validate_customer_phone(cls, v):
-        digits = "".join(ch for ch in v if ch.isdigit())
-        if len(digits) != 10:
-            raise ValueError("Customer phone number must contain 10 digits")
-        return v
-
-    @field_validator("customer_type")
-    @classmethod
-    def validate_customer_type(cls, v):
-        allowed = {"new", "returning"}
-        if v not in allowed:
-            raise ValueError("Customer type must be one of: new, returning")
-        return v
-
-    @field_validator("status")
-    @classmethod
-    def validate_appointment_status(cls, v):
-        allowed = {"scheduled", "checked_in", "assigned", "in_service", "done", "cancelled"}
-        if v not in allowed:
-            raise ValueError("Appointment status must be one of: scheduled, checked_in, assigned, in_service, done, cancelled")
-        return v
+    people_count: int = Field(default=1, ge=1)
+    status: AppointmentStatus = "scheduled"
 
 
 class AppointmentCreate(AppointmentBase):
@@ -142,119 +147,53 @@ class AppointmentOut(AppointmentBase):
 
 
 # ----------------------------
-# Turn Schemas
+# Turns / dispatch
 # ----------------------------
 class TurnBase(BaseModel):
     customer_name: str
     service_name: str
     technician_id: int
-    customer_phone: Optional[str] = None
+    customer_phone: OptionalCustomerPhone = None
     preferred_technician_id: Optional[int] = None
-    source: str = "checkin"
+    source: TurnSource = "checkin"
     assigned_by: Optional[str] = None
     notes: Optional[str] = None
-    status: str = "waiting"
+    status: TurnStatus = "waiting"
     discount_type: Optional[str] = None
-    discount_value: Optional[float] = 0
+    discount_value: Optional[Money] = 0
     discount_label: Optional[str] = None
-
-    @field_validator("customer_phone")
-    @classmethod
-    def validate_turn_phone(cls, v):
-        if not v:
-            return v
-        digits = "".join(ch for ch in v if ch.isdigit())
-        if len(digits) != 10:
-            raise ValueError("Customer phone number must contain 10 digits")
-        return v
-
-    @field_validator("source")
-    @classmethod
-    def validate_source(cls, v):
-        allowed = {"checkin", "appointment", "manual"}
-        if v not in allowed:
-            raise ValueError("Source must be one of: checkin, appointment, manual")
-        return v
-
-    @field_validator("status")
-    @classmethod
-    def validate_turn_status(cls, v):
-        allowed = {"waiting", "assigned", "in_service", "done", "cancelled"}
-        if v not in allowed:
-            raise ValueError("Turn status must be one of: waiting, assigned, in_service, done, cancelled")
-        return v
 
 
 class TurnCreate(TurnBase):
     pass
 
 
-class AssignTurnRequest(BaseModel):
+class _TurnRequestBase(BaseModel):
+    """Fields shared by the three assign requests."""
+
     customer_name: str
+    customer_phone: OptionalCustomerPhone = None
     service_name: str
-    technician_id: int
-    customer_phone: Optional[str] = None
     preferred_technician_id: Optional[int] = None
+    notes: Optional[str] = None
+    discount_type: Optional[str] = None
+    discount_value: Optional[Money] = 0
+    discount_label: Optional[str] = None
+
+
+class AssignTurnRequest(_TurnRequestBase):
+    technician_id: int
     source: str = "manual"
     assigned_by: Optional[str] = "manual"
-    notes: Optional[str] = None
-    discount_type: Optional[str] = None
-    discount_value: Optional[float] = 0
-    discount_label: Optional[str] = None
-
-    @field_validator("customer_phone")
-    @classmethod
-    def validate_customer_phone(cls, v):
-        if not v:
-            return v
-        digits = "".join(ch for ch in v if ch.isdigit())
-        if len(digits) != 10:
-            raise ValueError("Customer phone number must contain 10 digits")
-        return v
 
 
-class AutoAssignTurnRequest(BaseModel):
-    customer_name: str
-    customer_phone: Optional[str] = None
-    service_name: str
-    preferred_technician_id: Optional[int] = None
+class AutoAssignTurnRequest(_TurnRequestBase):
     source: str = "checkin"
-    notes: Optional[str] = None
-    discount_type: Optional[str] = None
-    discount_value: Optional[float] = 0
-    discount_label: Optional[str] = None
-
-    @field_validator("customer_phone")
-    @classmethod
-    def validate_customer_phone(cls, v):
-        if not v:
-            return v
-        digits = "".join(ch for ch in v if ch.isdigit())
-        if len(digits) != 10:
-            raise ValueError("Customer phone number must contain 10 digits")
-        return v
 
 
-class AssignPreferredTurnRequest(BaseModel):
-    customer_name: str
-    customer_phone: Optional[str] = None
-    service_name: str
+class AssignPreferredTurnRequest(_TurnRequestBase):
     preferred_technician_id: int
     source: str = "checkin"
-    notes: Optional[str] = None
-    discount_type: Optional[str] = None
-    discount_value: Optional[float] = 0
-    discount_label: Optional[str] = None
-
-    @field_validator("customer_phone")
-    @classmethod
-    def validate_customer_phone(cls, v):
-        if not v:
-            return v
-        digits = "".join(ch for ch in v if ch.isdigit())
-        if len(digits) != 10:
-            raise ValueError("Customer phone number must contain 10 digits")
-        return v
 
 
 class ReassignTurnRequest(BaseModel):
@@ -264,15 +203,7 @@ class ReassignTurnRequest(BaseModel):
 
 
 class TurnStatusUpdate(BaseModel):
-    status: str
-
-    @field_validator("status")
-    @classmethod
-    def validate_status(cls, v):
-        allowed = {"waiting", "assigned", "in_service", "done", "cancelled"}
-        if v not in allowed:
-            raise ValueError("Turn status must be one of: waiting, assigned, in_service, done, cancelled")
-        return v
+    status: TurnStatus
 
 
 class TurnStartRequest(BaseModel):
@@ -309,9 +240,42 @@ class TurnOut(BaseModel):
 
 
 # ----------------------------
-# Checkout Schemas
+# Checkout
 # ----------------------------
-class CheckoutBase(BaseModel):
+class CheckoutCreate(BaseModel):
+    """What the client is allowed to send: INPUTS only.
+    """
+
+    customer_name: str
+    customer_phone: OptionalCustomerPhone = None
+
+    technician_id: Optional[int] = None
+    turn_id: Optional[int] = None
+    appointment_id: Optional[int] = None
+
+    payment_method: PaymentMethod = "cash"
+    service_name: str
+
+    subtotal: Money
+    discount_type: DiscountType = "none"
+    discount_value: Money = 0
+    tip_amount: Money = 0
+
+    note: Optional[str] = None
+
+    @model_validator(mode="after")
+    def check_discount_makes_sense(self):
+        if self.discount_type == "percent" and self.discount_value > 100:
+            raise ValueError("A percent discount cannot be more than 100")
+        if self.discount_type == "fixed" and self.discount_value > self.subtotal:
+            raise ValueError("Discount cannot be more than the subtotal")
+        return self
+
+
+class CheckoutOut(BaseModel):
+    """Everything stored for a checkout, including the server-calculated numbers."""
+
+    id: int
     customer_name: str
     customer_phone: Optional[str] = None
 
@@ -319,72 +283,31 @@ class CheckoutBase(BaseModel):
     turn_id: Optional[int] = None
     appointment_id: Optional[int] = None
 
-    payment_method: str = "cash"
+    payment_method: str
     service_name: str
 
     subtotal: float
-    discount_type: str = "none"
-    discount_value: float = 0
-    discount_amount: float = 0
-    discount_paid_by: str = "owner"
+    discount_type: str
+    discount_value: float
+    discount_amount: float
+    discount_paid_by: str
 
-    tip_amount: float = 0
-    net_service: float = 0
-    technician_share: float = 0
-    salon_share: float = 0
-    salon_actual_revenue: float = 0
-    technician_total: float = 0
-    customer_pays: float = 0
+    tip_amount: float
+    net_service: float
+    technician_share: float
+    salon_share: float
+    salon_actual_revenue: float
+    technician_total: float
+    customer_pays: float
 
     note: Optional[str] = None
-
-    @field_validator("customer_phone")
-    @classmethod
-    def validate_checkout_phone(cls, v):
-        if not v:
-            return v
-        digits = "".join(ch for ch in v if ch.isdigit())
-        if len(digits) != 10:
-            raise ValueError("Customer phone number must contain 10 digits")
-        return v
-
-    @field_validator("payment_method")
-    @classmethod
-    def validate_payment_method(cls, v):
-        allowed = {"cash", "card", "zelle", "gift card"}
-        if v not in allowed:
-            raise ValueError("Payment method must be one of: cash, card, zelle, gift card")
-        return v
-
-    @field_validator("discount_type")
-    @classmethod
-    def validate_discount_type(cls, v):
-        allowed = {"none", "fixed", "percent"}
-        if v not in allowed:
-            raise ValueError("Discount type must be one of: none, fixed, percent")
-        return v
-
-    @field_validator("discount_paid_by")
-    @classmethod
-    def validate_discount_paid_by(cls, v):
-        if v != "owner":
-            raise ValueError("Discount paid by must be owner")
-        return v
-
-
-class CheckoutCreate(CheckoutBase):
-    pass
-
-
-class CheckoutOut(CheckoutBase):
-    id: int
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
 
 # ----------------------------
-# Income Report Schemas
+# Income reports
 # ----------------------------
 class IncomeTurnDetail(BaseModel):
     checkout_id: int
@@ -448,16 +371,16 @@ class SalonIncomeReport(BaseModel):
 
 
 # ----------------------------
-# Inventory Schemas
+# Inventory
 # ----------------------------
 class InventoryItemBase(BaseModel):
     item_name: str
     category: str
     supplier: Optional[str] = None
-    quantity: int
-    unit_price: float
+    quantity: int = Field(ge=0)
+    unit_price: Money
     purchase_date: Optional[date] = None
-    low_stock_level: int = 3
+    low_stock_level: int = Field(default=3, ge=0)
 
 
 class InventoryItemCreate(InventoryItemBase):
@@ -468,10 +391,10 @@ class InventoryItemUpdate(BaseModel):
     item_name: Optional[str] = None
     category: Optional[str] = None
     supplier: Optional[str] = None
-    quantity: Optional[int] = None
-    unit_price: Optional[float] = None
+    quantity: Optional[int] = Field(default=None, ge=0)
+    unit_price: Optional[Money] = None
     purchase_date: Optional[date] = None
-    low_stock_level: Optional[int] = None
+    low_stock_level: Optional[int] = Field(default=None, ge=0)
 
 
 class InventoryItemOut(InventoryItemBase):

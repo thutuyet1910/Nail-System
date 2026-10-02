@@ -438,7 +438,7 @@ textarea {
     margin-bottom: 4px;
 }
 
-/* app.js uses columnIndex % 5, so only 0-4 are needed */
+/* calendar.js uses columnIndex % 5, so only 0-4 are needed */
 .appointment.color-0 { background: #e78183; color: #fff; }
 .appointment.color-1 { background: #b88b53; color: #fff; }
 .appointment.color-2 { background: #2aa6a4; color: #fff; }
@@ -604,7 +604,6 @@ label {
 }
 
 .work-info-specialties > label {
-    display: block;
     margin-bottom: 10px;
 }
 
@@ -774,7 +773,7 @@ label {
     gap: 14px;
 }
 
-/* wider cards for the technician directory */
+/* smaller tiles for the technician directory (the details open in a popup) */
 #technicianCards {
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     align-items: start;
@@ -797,11 +796,20 @@ label {
 .dispatch-card-center {
     display: flex;
     justify-content: center;
+    flex-wrap: wrap;
+    gap: 10px;
     margin-top: 4px;
 }
 
 .dispatch-card-center .mini-btn {
     min-width: 140px;
+}
+
+.checkout-reassign-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
 }
 
 .tech-card-top {
@@ -868,7 +876,6 @@ label {
 .dispatch-status-waiting { background: #fff3d9; color: #9b6a00; }
 .dispatch-status-assigned { background: #e7efff; color: #3d5ea8; }
 .dispatch-status-in_service { background: #e1f7ea; color: #207a46; }
-.dispatch-status-done { background: #ececf3; color: #5c5c78; }
 
 .availability-badge {
     display: inline-flex;
@@ -913,7 +920,6 @@ label {
 .technician-card .tech-meta {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
 }
 
 .tech-meta-row {
@@ -1031,11 +1037,6 @@ label {
 .technician-card .tech-main-info {
     flex: 1;
     min-width: 0;
-}
-
-.technician-card .tech-title-row {
-    flex-wrap: nowrap;
-    gap: 8px;
 }
 
 .technician-card .tech-main-info h4 {
@@ -1287,10 +1288,6 @@ label {
     padding: 20px;
 }
 
-.cute-notification.hidden {
-    display: none;
-}
-
 .cute-notification-card {
     width: min(440px, 92vw);
     background: linear-gradient(180deg, #fff8fb 0%, #ffeef5 100%);
@@ -1539,10 +1536,6 @@ label {
     align-items: end;
 }
 
-.income-range-filters {
-    align-items: end;
-}
-
 .income-range-filters input,
 .income-range-filters select {
     min-width: 150px;
@@ -1552,7 +1545,6 @@ label {
     grid-template-columns: minmax(140px, 200px) minmax(180px, 1fr) minmax(180px, 1fr) auto;
     align-items: end;
 }
-
 
 .income-action-cell {
     display: flex;
@@ -1908,10 +1900,6 @@ label {
 
 .mini-btn.assign-btn:hover {
     background: #fdf2f6;
-}
-
-.queue-auto-assign-btn.icon-btn {
-    gap: 10px;
 }
 
 .history-all-btn {
