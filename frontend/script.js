@@ -399,7 +399,7 @@ function formatCheckInTime(dateString) {
 
 async function loadTodayCheckInOrder() {
   try {
-    const data = await api("/today-checkins", { fallback: "Failed to load today's check-in order." });
+    const data = await api("/queue-status", { fallback: "Failed to load today's check-in order." });
 
     if (!data.checkins || data.checkins.length === 0) {
       checkinOrderList.innerHTML = `<p class="queue-empty">${t("noCustomers")}</p>`;
@@ -411,7 +411,7 @@ async function loadTodayCheckInOrder() {
         <div class="queue-item">
           <div class="queue-item-left">
             <div class="queue-position">${item.position}</div>
-            <div class="queue-name">${item.full_name}</div>
+            <div class="queue-name">${item.display_name || `Customer #${item.position}`}</div>
           </div>
           <div class="queue-time">${formatCheckInTime(item.checked_in_at)}</div>
         </div>`)

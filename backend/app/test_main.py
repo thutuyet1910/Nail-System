@@ -10,6 +10,9 @@ Run from the folder that CONTAINS the `app` package:
 """
 
 from datetime import date, timedelta
+import os
+
+os.environ["CHECKIN_INTERNAL_SERVICE_TOKEN"] = "test-internal-token"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,6 +29,7 @@ from . import models
 from .database import Base, get_db
 from .main import app
 from .timeutils import today_local  # the salon's "today" (not the machine's)
+from .phone_normalization import PhoneNormalizationError, normalize_us_phone
 
 Base.metadata.create_all(bind=engine)
 
@@ -40,6 +44,7 @@ def override_get_db():
 
 app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app, raise_server_exceptions=True)
+client.headers.update({"X-Internal-Service-Token": "test-internal-token"})
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -178,6 +183,67 @@ class TestRoot:
         r = client.get("/")
         assert r.status_code == 200
         assert "running" in r.json()["message"].lower()
+
+
+class TestCanonicalPhoneNormalization:
+
+    @pytest.mark.parametrize(
+        "value",
+        ["6025551234", "(602) 555-1234", "602-555-1234", "+16025551234"],
+    )
+    def test_equivalent_us_formats(self, value):
+        normalized = normalize_us_phone(value)
+        assert normalized.national_digits == "6025551234"
+        assert normalized.e164 == "+16025551234"
+
+    @pytest.mark.parametrize("value", ["123", "+442071838750", "602-CALL-NOW", "+26025551234"])
+    def test_invalid_or_unsupported_phone(self, value):
+        with pytest.raises(PhoneNormalizationError):
+            normalize_us_phone(value)
+
+    def test_customer_lookup_accepts_e164_and_keeps_national_storage(self):
+        assert register("(602) 555-1234", "Phone Test", "1990-01-01").status_code == 201
+        response = client.get("/customers/by-phone/+16025551234")
+        assert response.status_code == 200
+        assert response.json()["phone_number"] == "6025551234"
+        assert response.json()["phone_e164"] == "+16025551234"
+
+    def test_today_checkin_exposes_stable_ids_and_e164(self):
+        customer = register("6025551234", "Queue Test", "1990-01-01").json()
+        assert checkin("+16025551234").status_code == 200
+        item = client.get("/today-checkins").json()["checkins"][0]
+        assert item["customer_id"] == customer["id"]
+        assert item["visit_id"] > 0
+        assert item["phone_e164"] == "+16025551234"
+
+
+class TestInternalServiceAuthentication:
+
+    def test_today_checkins_requires_internal_token(self):
+        anonymous = TestClient(app)
+        assert anonymous.get("/today-checkins").status_code == 401
+        assert anonymous.get("/today-checkins", headers={"X-Internal-Service-Token": "wrong"}).status_code == 401
+
+    def test_valid_internal_token_and_public_checkin(self):
+        anonymous = TestClient(app)
+        assert anonymous.get("/today-checkins", headers={"X-Internal-Service-Token": "test-internal-token"}).status_code == 200
+        assert anonymous.get("/services").status_code == 200
+
+    def test_internal_customer_candidate_is_protected_and_minimal(self):
+        customer = register("6025551234", "Private Customer", "1990-01-01", email="private@example.com").json()
+        anonymous = TestClient(app)
+        path = "/internal/customers/by-phone/6025551234"
+        assert anonymous.get(path).status_code == 401
+        response = anonymous.get(path, headers={"X-Internal-Service-Token": "test-internal-token"})
+        assert response.status_code == 200
+        assert response.json() == {"id": customer["id"], "full_name": "Private Customer", "phone_e164": "+16025551234"}
+        assert "email" not in response.json()
+        assert "date_of_birth" not in response.json()
+        assert "referral_code" not in response.json()
+
+    def test_secret_is_not_exposed(self):
+        assert "test-internal-token" not in str(client.get("/").json())
+        assert "test-internal-token" not in str(client.get("/queue-status").json())
 
     def test_services_are_seeded_and_listed(self):
         r = client.get("/services")

@@ -16,6 +16,8 @@ from .database import Base, SessionLocal, engine, get_db
 from .email_utils import send_birthday_email, send_referral_discount_email
 from .scheduler import scheduler
 from .timeutils import SALON_TZ, now_local, today_local
+from .phone_normalization import normalize_us_phone
+from .security import require_internal_service
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nail_system")
@@ -407,7 +409,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Nail System API", version="0.3.0", lifespan=lifespan)
 
-ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://127.0.0.1:5500,http://localhost:5500").split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
@@ -470,13 +472,33 @@ def create_new_customer(customer: schemas.CustomerCreate, db: Session = Depends(
 
 
 @app.get("/customers", response_model=list[schemas.CustomerResponse])
-def get_all_customers(db: Session = Depends(get_db)):
+def get_all_customers(db: Session = Depends(get_db), _=Depends(require_internal_service)):
     return db.query(models.Customer).all()
+
+
+@app.get("/customers/id/{customer_id}", response_model=schemas.CustomerResponse)
+def get_customer(customer_id: int, db: Session = Depends(get_db), _=Depends(require_internal_service)):
+    customer = db.get(models.Customer, customer_id)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found.")
+    return customer
 
 
 @app.get("/customers/by-phone/{phone_number}", response_model=schemas.CustomerResponse)
 def get_customer_by_phone(phone_number: str, db: Session = Depends(get_db)):
     return _get_customer_or_404(db, phone_number)
+
+
+@app.get("/internal/customers/by-phone/{phone_number}", response_model=schemas.CustomerCandidateResponse)
+def get_internal_customer_candidate(
+    phone_number: str, db: Session = Depends(get_db), _=Depends(require_internal_service)
+):
+    customer = _get_customer_or_404(db, phone_number)
+    return {
+        "id": customer.id,
+        "full_name": customer.full_name,
+        "phone_e164": normalize_us_phone(customer.phone_number).e164,
+    }
 
 
 @app.patch("/customers/{phone_number}/update-phone", response_model=schemas.CustomerResponse)
@@ -531,7 +553,7 @@ def update_customer_profile(
 
 
 @app.get("/customers/{phone_number}/visits")
-def get_customer_visits(phone_number: str, db: Session = Depends(get_db)):
+def get_customer_visits(phone_number: str, db: Session = Depends(get_db), _=Depends(require_internal_service)):
     customer = _get_customer_or_404(db, phone_number)
 
     visits = (
@@ -579,7 +601,7 @@ def get_check_in_status(phone_number: str, db: Session = Depends(get_db)):
 
 
 @app.get("/today-checkins", response_model=schemas.TodayCheckInResponse)
-def get_today_checkins(db: Session = Depends(get_db)):
+def get_today_checkins(db: Session = Depends(get_db), _=Depends(require_internal_service)):
     visits = (
         db.query(models.Visit)
         .options(
@@ -593,9 +615,12 @@ def get_today_checkins(db: Session = Depends(get_db)):
 
     checkins = [
         {
+            "visit_id": visit.id,
+            "customer_id": visit.customer.id,
             "position": index,
             "full_name": visit.customer.full_name,
             "phone_number": visit.customer.phone_number,
+            "phone_e164": normalize_us_phone(visit.customer.phone_number).e164,
             "checked_in_at": visit.checked_in_at,
             "services": [item.service.name for item in visit.visit_services],
             **_today_queue_discount(visit, visit.customer),
@@ -604,6 +629,26 @@ def get_today_checkins(db: Session = Depends(get_db)):
     ]
 
     return {"checkins": checkins}
+
+
+@app.get("/queue-status")
+def get_public_queue_status(db: Session = Depends(get_db)):
+    visits = (
+        db.query(models.Visit)
+        .options(joinedload(models.Visit.visit_services).joinedload(models.VisitService.service))
+        .filter(models.Visit.visit_date == today_local())
+        .order_by(models.Visit.checked_in_at.asc())
+        .all()
+    )
+    return {"checkins": [
+        {
+            "position": index,
+            "display_name": f"Customer #{index}",
+            "checked_in_at": visit.checked_in_at,
+            "services": [item.service.name for item in visit.visit_services],
+        }
+        for index, visit in enumerate(visits, start=1)
+    ]}
 
 
 @app.post("/customers/check-in/{phone_number}", response_model=schemas.CheckInResponse)
@@ -803,7 +848,7 @@ def apply_referral_code(payload: schemas.ApplyReferralCodeRequest, db: Session =
 # Birthday reminders
 # ----------------------------
 @app.get("/birthday-reminders", response_model=list[schemas.BirthdayReminderResponse])
-def get_upcoming_birthday_reminders(db: Session = Depends(get_db)):
+def get_upcoming_birthday_reminders(db: Session = Depends(get_db), _=Depends(require_internal_service)):
     reminders = []
     for customer in db.query(models.Customer).all():
         days_left = days_until_next_birthday(customer.date_of_birth)
@@ -822,6 +867,6 @@ def get_upcoming_birthday_reminders(db: Session = Depends(get_db)):
 
 
 @app.post("/birthday-reminders/send")
-def send_birthday_reminders(db: Session = Depends(get_db)):
+def send_birthday_reminders(db: Session = Depends(get_db), _=Depends(require_internal_service)):
     result = process_birthday_reminders(db)
     return {"message": "Birthday reminder process completed.", **result}

@@ -10,3 +10,7 @@ venv/
 .vscode/
 .DS_Store
 .vs/
+*.sqlite
+.pytest_cache/
+pytest-cache-files-*/
+*.log

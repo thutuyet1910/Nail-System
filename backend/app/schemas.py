@@ -5,6 +5,7 @@ from typing import Annotated, Optional
 from pydantic import AfterValidator, BaseModel, ConfigDict, computed_field, field_validator
 
 from .timeutils import today_local
+from .phone_normalization import normalize_us_phone
 
 MIN_BIRTH_DATE = date(1900, 1, 1)
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -15,10 +16,7 @@ def format_phone_display(digits: str) -> str:
 
 
 def validate_phone(v: str) -> str:
-    digits_only = re.sub(r"\D", "", v)
-    if len(digits_only) != 10:
-        raise ValueError("Phone number must be exactly 10 digits.")
-    return digits_only
+    return normalize_us_phone(v).national_digits
 
 
 def _clean_name(v: str) -> str:
@@ -87,7 +85,18 @@ class CustomerResponse(BaseModel):
     def phone_number_formatted(self) -> str:
         return format_phone_display(self.phone_number)
 
+    @computed_field
+    @property
+    def phone_e164(self) -> str:
+        return normalize_us_phone(self.phone_number).e164
+
     model_config = ConfigDict(from_attributes=True)
+
+
+class CustomerCandidateResponse(BaseModel):
+    id: int
+    full_name: str
+    phone_e164: str
 
 
 class UpdatePhoneRequest(BaseModel):
@@ -137,9 +146,12 @@ class CheckInResponse(BaseModel):
 
 
 class TodayCheckInItem(BaseModel):
+    visit_id: int
+    customer_id: int
     position: int
     full_name: str
     phone_number: str
+    phone_e164: str
     checked_in_at: datetime
     services: list[str] = []
     discount_type: Optional[str] = None
