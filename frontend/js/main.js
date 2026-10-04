@@ -290,19 +290,20 @@ appointmentDeleteBtn?.addEventListener("click", async () => {
     closeAppointmentModal();
 
     const confirmed = await showCuteConfirm(
-        "Delete this appointment?",
+        "Cancel this appointment? The appointment will remain in history.",
         "Please Confirm"
     );
 
     if (!confirmed) return;
 
     try {
-        await fetchJson(`${API_BASE}/appointments/${apptId}`, {
-            method: "DELETE",
+        await fetchJson(`${API_BASE}/appointments/${apptId}/cancel`, {
+            method: "POST",
+            body: JSON.stringify({ source: "owner" }),
         });
 
         activeAppointment = null;
-        showCuteNotification("Appointment deleted successfully.");
+        showCuteNotification("Appointment cancelled successfully.");
         await loadAll();
         showView("calendar");
     } catch (error) {
@@ -349,6 +350,7 @@ async function loadAll() {
 
     try {
         await resetTemporaryUnavailableTechs();
+        await loadBookingServices();
         syncDefaultSpecialtiesToFilter();
         await loadTechnicians();
         await loadAppointments();
@@ -455,6 +457,7 @@ appointmentForm?.addEventListener("submit", async (e) => {
     const appointmentTimeApiValue = displayDateTimeToApi(appointmentTime);
     const phoneDigits = customerPhone.replace(/\D/g, "");
     const selectedServices = getSelectedAppointmentServices();
+    const selectedServiceIds = getSelectedAppointmentServiceIds();
 
     if (!customerName) {
         showCuteNotification("Customer name is required.", "Notice");
@@ -486,6 +489,7 @@ appointmentForm?.addEventListener("submit", async (e) => {
         customer_name: customerName,
         customer_phone: customerPhone,
         service_category: selectedServices,
+        service_ids: selectedServiceIds,
         people_count: Number(appointmentPeopleCount?.value || 1),
         appointment_time: appointmentTimeApiValue,
         special_requests: specialRequests.value.trim() || null,
@@ -497,8 +501,8 @@ appointmentForm?.addEventListener("submit", async (e) => {
 
     try {
         if (appointmentId) {
-            await fetchJson(`${API_BASE}/appointments/${appointmentId}`, {
-                method: "PUT",
+            await fetchJson(`${API_BASE}/appointments/${appointmentId}/reschedule`, {
+                method: "POST",
                 body: JSON.stringify(payload),
             });
             showCuteNotification("Appointment updated successfully.");
@@ -596,9 +600,16 @@ queueAutoAssignBtn?.addEventListener("click", async () => {
     element?.addEventListener("change", loadTechnicians);
 });
 
-loadAll();
+async function initializeOwnerDashboard() {
+    if (!(await requireOwner())) return;
+    await loadAll();
+    await loadNotifications();
+}
+
+initializeOwnerDashboard();
 
 setInterval(async () => {
+    if (!ownerAuthenticated) return;
     if (customerListView.classList.contains("active-view")) {
         await loadTodayTurns();
         await loadCheckoutHistory();
@@ -607,6 +618,7 @@ setInterval(async () => {
 }, 5000);
 
 setInterval(async () => {
+    if (!ownerAuthenticated) return;
     await resetTemporaryUnavailableTechs();
     await loadTodayTurns();
     await loadCheckoutHistory();

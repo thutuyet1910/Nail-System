@@ -6,8 +6,17 @@ function getSelectedAppointmentServices() {
     return Array.from(
         appointmentServicesBox.querySelectorAll('input[type="checkbox"]:checked')
     )
-        .map((checkbox) => checkbox.value)
+        .map((checkbox) => checkbox.dataset.serviceName || checkbox.value)
         .join(", ");
+}
+
+function getSelectedAppointmentServiceIds() {
+    if (!appointmentServicesBox) return [];
+    return Array.from(
+        appointmentServicesBox.querySelectorAll('input[type="checkbox"]:checked')
+    )
+        .map((checkbox) => Number(checkbox.dataset.serviceId || 0))
+        .filter(Boolean);
 }
 
 function setSelectedAppointmentServices(value) {
@@ -27,7 +36,8 @@ function setSelectedAppointmentServices(value) {
     appointmentServicesBox
         .querySelectorAll('input[type="checkbox"]')
         .forEach((checkbox) => {
-            if (selectedValues.includes(checkbox.value.trim().toLowerCase())) {
+            const serviceName = checkbox.dataset.serviceName || checkbox.value;
+            if (selectedValues.includes(serviceName.trim().toLowerCase())) {
                 checkbox.checked = true;
             }
         });
@@ -72,6 +82,10 @@ function closeAppointmentModal() {
 function getAppointmentForTurn(turn) {
     if (!turn) return null;
 
+    if (turn.appointment_id) {
+        return appointments.find((appt) => Number(appt.id) === Number(turn.appointment_id)) || null;
+    }
+
     const turnName = (turn.customer_name || "").trim().toLowerCase();
     const turnPhone = (turn.customer_phone || "").replace(/\D/g, "");
     const turnService = normalizeServiceForMatch(turn.service_name);
@@ -99,21 +113,8 @@ function getAppointmentForTurn(turn) {
 // Used by Auto Assign to give the customer the technician they booked.
 function getAppointmentForCheckin(item) {
     if (!item) return null;
-
-    const today = new Date();
-    const matches = appointments.filter((appt) =>
-        sameDay(new Date(appt.appointment_time), today) &&
-        isSameCustomer(item.full_name, item.phone_number, appt.customer_name, appt.customer_phone)
-    );
-    if (!matches.length) return null;
-
-    const checkinMs = getCheckinTimeMs(item);
-    const distance = (appt) =>
-        checkinMs === null
-            ? new Date(appt.appointment_time).getTime()
-            : Math.abs(new Date(appt.appointment_time).getTime() - checkinMs);
-
-    return matches.sort((a, b) => distance(a) - distance(b))[0];
+    if (item.appointment_match?.outcome !== "exact_match") return null;
+    return item.appointment_match.appointment || null;
 }
 
 function resetAppointmentForm() {
@@ -156,4 +157,19 @@ function populateAppointmentTechnicianDropdown() {
 
 async function loadAppointments() {
     appointments = await fetchJson(`${API_BASE}/appointments`);
+}
+
+async function loadBookingServices() {
+    bookingServices = await fetchJson(`${API_BASE}/services`);
+    if (!appointmentServicesBox) return;
+    appointmentServicesBox.innerHTML = "";
+    bookingServices.forEach((service) => {
+        const label = createSpecialtyCheckbox(service.name);
+        const checkbox = label.querySelector('input[type="checkbox"]');
+        checkbox.value = String(service.id);
+        checkbox.dataset.serviceId = String(service.id);
+        checkbox.dataset.serviceName = service.name;
+        appointmentServicesBox.appendChild(label);
+    });
+    appointmentServicesBox.dataset.syncedDefaultServices = "true";
 }

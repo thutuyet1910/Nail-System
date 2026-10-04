@@ -71,15 +71,32 @@ function askPin() {
 }
 
 async function requireOwner() {
+    try {
+        const session = await fetchJson(`${API_BASE}/auth/session`);
+        if (session.authenticated) {
+            ownerAuthenticated = true;
+            ownerSessionExpiresAt = session.expires_at;
+            return true;
+        }
+    } catch {
+        ownerAuthenticated = false;
+    }
     const entered = await askPin();
     if (entered === null) return false;
 
-    if (entered !== OWNER_PIN) {
-        showCuteNotification("Incorrect PIN.", "Oops");
+    try {
+        const session = await fetchJson(`${API_BASE}/auth/login`, {
+            method: "POST",
+            body: JSON.stringify({ password: entered }),
+        });
+        ownerAuthenticated = true;
+        ownerSessionExpiresAt = session.expires_at;
+        return true;
+    } catch (error) {
+        ownerAuthenticated = false;
+        showCuteNotification(error.message || "Incorrect owner password/PIN.", "Oops");
         return false;
     }
-
-    return true;
 }
 
 function showCuteNotification(message, title = "Success") {

@@ -185,7 +185,7 @@ function toDatetimeLocalValue(value) {
 }
 
 function checkApi() {
-    return fetch(`${API_BASE}/`)
+    return fetch(`${API_BASE}/`, { credentials: "include" })
         .then((res) => {
             if (!res.ok) throw new Error();
             apiDot.className = "dot online";
@@ -201,9 +201,20 @@ async function fetchJson(url, options = {}) {
     let response;
 
     try {
+        const method = String(options.method || "GET").toUpperCase();
+        const csrfToken = document.cookie
+            .split("; ")
+            .find((item) => item.startsWith("owner_csrf="))
+            ?.split("=").slice(1).join("=");
+        const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+        if (!["GET", "HEAD", "OPTIONS"].includes(method) && csrfToken) {
+            headers["X-CSRF-Token"] = decodeURIComponent(csrfToken);
+        }
         response = await fetch(url, {
-            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            headers,
             ...options,
+            headers,
         });
     } catch (error) {
         throw new Error(`Could not connect to backend: ${url}`);

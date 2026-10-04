@@ -1,14 +1,16 @@
-// Same customer? Matches by phone digits first, otherwise by name (not case sensitive).
+// Same customer? A usable phone is authoritative; name is only a fallback when neither side has one.
 function isSameCustomer(nameA, phoneA, nameB, phoneB) {
     const normalizedNameA = (nameA || "").trim().toLowerCase();
     const normalizedNameB = (nameB || "").trim().toLowerCase();
-    const digitsA = (phoneA || "").replace(/\D/g, "");
-    const digitsB = (phoneB || "").replace(/\D/g, "");
+    const normalizePhone = (value) => {
+        const digits = (value || "").replace(/\D/g, "");
+        return digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+    };
+    const digitsA = normalizePhone(phoneA);
+    const digitsB = normalizePhone(phoneB);
 
-    return Boolean(
-        (digitsA && digitsB && digitsA === digitsB) ||
-        (normalizedNameA && normalizedNameB && normalizedNameA === normalizedNameB)
-    );
+    if (digitsA || digitsB) return Boolean(digitsA && digitsB && digitsA === digitsB);
+    return Boolean(normalizedNameA && normalizedNameB && normalizedNameA === normalizedNameB);
 }
 
 // When the customer checked in, in milliseconds (null if the check-in app sent no usable time).
@@ -223,6 +225,9 @@ function mergeTodayTurn(turn) {
 //                      working, not qualified): use the normal fair assignment
 // ownTurnId is the customer's own waiting turn (if any), so it does not make the technician look busy.
 function getBookedTechnicianPlan(item, ownTurnId = null) {
+    if (item?.appointment_match?.outcome === "ambiguous") {
+        return { mode: "review" };
+    }
     const appointment = getAppointmentForCheckin(item);
     const bookedTechId = appointment ? (appointment.technician_id || appointment.preferred_technician_id) : null;
     if (!bookedTechId) return { mode: "auto" };
@@ -260,6 +265,11 @@ async function autoAssignCheckin(item, bookedTechId = null) {
         discount_value: Number(item.discount_value || 0),
         discount_label: item.discount_label || null
     };
+    if (item.visit_id) body.checkin_visit_id = item.visit_id;
+    if (item.customer_id) body.checkin_customer_id = item.customer_id;
+    if (item.appointment_match?.outcome === "exact_match") {
+        body.appointment_id = item.appointment_match.appointment.id;
+    }
     if (bookedTechId) body.preferred_technician_id = bookedTechId;
 
     try {
@@ -301,6 +311,7 @@ async function autoAssignAllWaitingCheckins() {
     let assignedCount = 0;
     let failedCount = 0;
     let waitingForBookedCount = 0;
+    let ambiguousCount = 0;
 
     for (const item of orderedItems) {
         // Work this out again for each customer: every assignment above changes who is busy.
@@ -309,6 +320,10 @@ async function autoAssignAllWaitingCheckins() {
 
         if (plan.mode === "wait") {
             waitingForBookedCount += 1;
+            continue;
+        }
+        if (plan.mode === "review") {
+            ambiguousCount += 1;
             continue;
         }
 
@@ -345,6 +360,11 @@ async function autoAssignAllWaitingCheckins() {
             `${waitingForBookedCount} ${waitingForBookedCount > 1 ? "customers are" : "customer is"} waiting for the technician they booked.`
         );
     }
+    if (ambiguousCount > 0) {
+        waitingNotes.push(
+            `${ambiguousCount} ${ambiguousCount > 1 ? "customers need" : "customer needs"} an appointment match reviewed before assignment.`
+        );
+    }
 
     if (assignedCount > 0 && waitingNotes.length === 0) {
         showCuteNotification(
@@ -355,7 +375,7 @@ async function autoAssignAllWaitingCheckins() {
             `${assignedCount} customer${assignedCount > 1 ? "s have" : " has"} been assigned. ${waitingNotes.join(" ")}`,
             "Notice"
         );
-    } else if (waitingForBookedCount === 0) {
+    } else if (waitingForBookedCount === 0 && ambiguousCount === 0) {
         showCuteNotification(
             "No customers were assigned because no technician is available right now.",
             "Notice"
@@ -451,8 +471,14 @@ function closePreferredTechModal() {
 async function submitPreferredAssignment(selectedTechId) {
     if (!pendingPreferredCheckinItem) return;
 
+    if (pendingPreferredCheckinItem.appointment_match?.outcome === "ambiguous") {
+        showCuteNotification("This customer has multiple possible appointments. Review the appointments before assigning.", "Notice");
+        return;
+    }
+
     try {
         const serviceName = getCombinedServiceName(pendingPreferredCheckinItem);
+        const matchedAppointment = getAppointmentForCheckin(pendingPreferredCheckinItem);
 
         await fetchJson(`${API_BASE}/turns/assign-preferred`, {
             method: "POST",
@@ -464,7 +490,10 @@ async function submitPreferredAssignment(selectedTechId) {
                 source: "checkin",
                 discount_type: pendingPreferredCheckinItem.discount_type || null,
                 discount_value: Number(pendingPreferredCheckinItem.discount_value || 0),
-                discount_label: pendingPreferredCheckinItem.discount_label || null
+                discount_label: pendingPreferredCheckinItem.discount_label || null,
+                appointment_id: matchedAppointment?.id || null,
+                checkin_customer_id: pendingPreferredCheckinItem.customer_id || null,
+                checkin_visit_id: pendingPreferredCheckinItem.visit_id || null
             })
         });
 
@@ -600,7 +629,7 @@ async function loadLiveCheckinQueue() {
     if (!liveCheckinQueue) return;
 
     try {
-        const response = await fetch(`${CHECKIN_API_BASE}/today-checkins`);
+        const response = await fetch(`${API_BASE}/checkins/today`, { credentials: "include" });
         const data = await response.json();
 
         if (!response.ok) {
@@ -610,6 +639,7 @@ async function loadLiveCheckinQueue() {
         liveCheckins = data.checkins || [];
         renderLiveCheckinQueue(liveCheckins);
     } catch (error) {
+        liveCheckins = [];
         liveCheckinQueue.innerHTML = `
       <div class="tech-card">
         <div class="tech-card-header">

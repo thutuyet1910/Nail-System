@@ -30,6 +30,14 @@ const navTechIncome = document.getElementById("navTechIncome");
 
 const navSalonIncome = document.getElementById("navSalonIncome");
 
+const notificationsBtn = document.getElementById("notificationsBtn");
+const notificationBadge = document.getElementById("notificationBadge");
+const notificationsPanel = document.getElementById("notificationsPanel");
+const notificationsList = document.getElementById("notificationsList");
+const markAllNotificationsRead = document.getElementById("markAllNotificationsRead");
+const closeNotifications = document.getElementById("closeNotifications");
+const logoutBtn = document.getElementById("logoutBtn");
+
 const preferredTechModal = document.getElementById("preferredTechModal");
 
 const preferredTechSelect = document.getElementById("preferredTechSelect");

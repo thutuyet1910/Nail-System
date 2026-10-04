@@ -10,6 +10,9 @@ let techniciansAll = [];
 
 let appointments = [];
 
+// Authoritative booking catalog loaded from the owner backend.
+let bookingServices = [];
+
 let selectedDate = new Date();
 
 let confirmResolve = null;
@@ -49,3 +52,7 @@ let techIncomeRangeSummaries = [];
 let techIncomeRangeLabel = "";
 
 let inventoryItems = [];
+
+let ownerAuthenticated = false;
+let ownerSessionExpiresAt = null;
+let ownerNotifications = [];

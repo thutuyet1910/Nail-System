@@ -224,7 +224,10 @@ function syncDefaultSpecialtiesToFilter() {
 
     if (appointmentServicesBox && appointmentServicesBox.dataset.syncedDefaultServices !== "true") {
         appointmentServicesBox.innerHTML = "";
-        DEFAULT_APPOINTMENT_SERVICES.forEach((service) => {
+        const appointmentServiceNames = bookingServices.length
+            ? bookingServices.map((service) => service.name)
+            : DEFAULT_APPOINTMENT_SERVICES;
+        appointmentServiceNames.forEach((service) => {
             appointmentServicesBox.appendChild(createSpecialtyCheckbox(service));
         });
         appointmentServicesBox.dataset.syncedDefaultServices = "true";

@@ -59,8 +59,6 @@ const REMOVED_SPECIALTIES_STORAGE_KEY = "ownerRemovedSpecialties";
 
 const TECH_UNAVAILABLE_TODAY_STORAGE_KEY = "ownerTechUnavailableToday";
 
-const OWNER_PIN = "1234";
-
 // MUST stay identical to SERVICE_TO_SPECIALTIES in backend/crud.py.
 // The backend is the one that finally accepts or rejects an assignment; this copy only
 // lets the "Assign Preferred" / "Reassign" dropdown hide technicians the backend would refuse.

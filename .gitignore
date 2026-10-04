@@ -8,3 +8,8 @@ __pycache__/
 *.sqlite3
 *.db
 .DS_Store
+.venv/
+*.sqlite
+.pytest_cache/
+pytest-cache-files-*/
+*.log

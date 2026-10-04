@@ -163,7 +163,9 @@ function getDiscountForTurn(turn) {
 function fillCheckoutFormFromTurn(turn) {
     if (!turn) return;
 
-    const linkedAppointment = getAppointmentForTurn(turn);
+    const linkedAppointment = turn.appointment_id
+        ? appointments.find((appt) => Number(appt.id) === Number(turn.appointment_id))
+        : getAppointmentForTurn(turn);
     const discount = getDiscountForTurn(turn);
 
     if (checkoutCustomerName) checkoutCustomerName.value = turn.customer_name || "";

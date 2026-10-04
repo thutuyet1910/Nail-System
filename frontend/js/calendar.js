@@ -58,7 +58,7 @@ function renderCalendar() {
 
     const dailyAppointments = appointments.filter((appt) => {
         const dt = new Date(appt.appointment_time);
-        return sameDay(dt, selectedDate);
+        return appt.status !== "cancelled" && sameDay(dt, selectedDate);
     });
 
     const appointmentBlocks = dailyAppointments

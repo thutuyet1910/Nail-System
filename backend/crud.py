@@ -7,6 +7,10 @@ from sqlalchemy.orm import Session
 
 import models
 import schemas
+import booking_service
+from phone_normalization import PhoneNormalizationError, normalize_us_phone
+from timeutils import salon_naive_now, salon_today, utc_now_naive
+from booking_migrations import sync_technician_eligibility_from_legacy, sync_technician_schedule_from_legacy
 
 
 class BusinessRuleError(ValueError):
@@ -25,6 +29,15 @@ FINISHED_TURN_STATUSES = ("done", "cancelled")
 ALLOWED_TURN_TRANSITIONS = {
     "waiting": {"assigned", "in_service", "done", "cancelled"},
     "assigned": {"in_service", "done", "cancelled"},
+    "in_service": {"done", "cancelled"},
+    "done": set(),
+    "cancelled": set(),
+}
+
+ALLOWED_APPOINTMENT_TRANSITIONS = {
+    "scheduled": {"checked_in", "cancelled"},
+    "checked_in": {"assigned", "cancelled"},
+    "assigned": {"in_service", "cancelled"},
     "in_service": {"done", "cancelled"},
     "done": set(),
     "cancelled": set(),
@@ -72,7 +85,8 @@ SERVICE_TO_SPECIALTIES = {
 
 
 def _now() -> datetime:
-    return datetime.now()
+    """Salon (America/Phoenix) wall-clock time, not the host's. Turn/Checkout columns are salon-local."""
+    return salon_naive_now()
 
 
 def _day_bounds(day: date) -> tuple[datetime, datetime]:
@@ -80,11 +94,16 @@ def _day_bounds(day: date) -> tuple[datetime, datetime]:
 
 
 def _today_bounds() -> tuple[datetime, datetime]:
-    return _day_bounds(date.today())
+    return _day_bounds(salon_today())
 
 
 def _digits(value: str | None) -> str:
-    return "".join(ch for ch in (value or "") if ch.isdigit())
+    if not value:
+        return ""
+    try:
+        return normalize_us_phone(value).e164
+    except PhoneNormalizationError:
+        return ""
 
 
 # ----------------------------
@@ -112,9 +131,26 @@ def _ensure_technician_is_unique(
 
 def create_technician(db: Session, technician: schemas.TechnicianCreate):
     _ensure_technician_is_unique(db, technician.full_name, technician.employee_id)
-
-    db_technician = models.Technician(**technician.model_dump())
+    data = technician.model_dump()
+    service_ids = data.pop("service_ids", None)
+    db_technician = models.Technician(**data)
     db.add(db_technician)
+    db.flush()
+    sync_technician_schedule_from_legacy(db, db_technician)
+    if service_ids is None:
+        sync_technician_eligibility_from_legacy(db, db_technician)
+    else:
+        valid_ids = {
+            item.id
+            for item in db.query(models.BookingService)
+            .filter(models.BookingService.id.in_(service_ids), models.BookingService.is_active.is_(True))
+            .all()
+        }
+        if valid_ids != set(service_ids):
+            raise BusinessRuleError("One or more technician service IDs are invalid")
+        db_technician.service_eligibilities = [
+            models.TechnicianService(service_id=service_id) for service_id in service_ids
+        ]
     db.commit()
     db.refresh(db_technician)
     return db_technician
@@ -165,12 +201,30 @@ def update_technician(db: Session, technician_id: int, payload: schemas.Technici
         return None
 
     update_data = payload.model_dump(exclude_unset=True)
+    service_ids = update_data.pop("service_ids", None)
     _ensure_technician_is_unique(
         db, update_data.get("full_name"), update_data.get("employee_id"), exclude_id=technician_id
     )
 
     for key, value in update_data.items():
         setattr(db_technician, key, value)
+
+    if "work_schedule" in update_data:
+        sync_technician_schedule_from_legacy(db, db_technician)
+    if service_ids is not None:
+        valid_ids = {
+            item.id
+            for item in db.query(models.BookingService)
+            .filter(models.BookingService.id.in_(service_ids), models.BookingService.is_active.is_(True))
+            .all()
+        }
+        if valid_ids != set(service_ids):
+            raise BusinessRuleError("One or more technician service IDs are invalid")
+        db_technician.service_eligibilities = [
+            models.TechnicianService(service_id=service_id) for service_id in service_ids
+        ]
+    elif "specialties" in update_data:
+        sync_technician_eligibility_from_legacy(db, db_technician)
 
     db.commit()
     db.refresh(db_technician)
@@ -382,18 +436,8 @@ def _validate_appointment(db: Session, payload: dict, exclude_id: int | None = N
 
 
 def create_appointment(db: Session, appointment: schemas.AppointmentCreate):
-    payload = appointment.model_dump()
-    payload["service_name"] = payload.get("service_category")
-    _validate_appointment(db, payload)
-
-    if not payload.get("appointment_code"):
-        payload["appointment_code"] = _generate_appointment_code(db)
-
-    db_appointment = models.Appointment(**payload)
-    db.add(db_appointment)
-    db.commit()
-    db.refresh(db_appointment)
-    return db_appointment
+    """Compatibility wrapper; all appointment creation uses the booking domain."""
+    return booking_service.create_booking(db, appointment)
 
 
 def get_appointments(
@@ -423,25 +467,24 @@ def get_appointment(db: Session, appointment_id: int):
 
 
 def update_appointment(db: Session, appointment_id: int, appointment: schemas.AppointmentUpdate):
-    db_appointment = get_appointment(db, appointment_id)
-    if not db_appointment:
-        return None
-
-    payload = appointment.model_dump(exclude_unset=True)
-    if "service_category" in payload:
-        payload["service_name"] = payload["service_category"]
-    _validate_appointment(db, payload, exclude_id=appointment_id)
-
-    if not payload.get("appointment_code"):
-        payload["appointment_code"] = db_appointment.appointment_code or _generate_appointment_code(db)
-
-    for key, value in payload.items():
-        setattr(db_appointment, key, value)
-    db_appointment.updated_at = _now()
-
-    db.commit()
-    db.refresh(db_appointment)
-    return db_appointment
+    """Compatibility wrapper; generic PUT is treated as a validated reschedule."""
+    service_ids = appointment.service_ids or booking_service.resolve_service_ids_from_legacy_names(
+        db, appointment.service_category or appointment.service_name
+    )
+    payload = schemas.AppointmentReschedule(
+        appointment_time=appointment.appointment_time,
+        service_ids=service_ids,
+        technician_id=appointment.technician_id,
+        preferred_technician_id=appointment.preferred_technician_id,
+        people_count=appointment.people_count,
+        customer_name=appointment.customer_name,
+        customer_phone=appointment.customer_phone,
+        special_requests=appointment.special_requests,
+        allergies=appointment.allergies,
+        note=appointment.note,
+        idempotency_key=appointment.idempotency_key,
+    )
+    return booking_service.reschedule_booking(db, appointment_id, payload)
 
 
 def delete_appointment(db: Session, appointment_id: int):
@@ -503,6 +546,92 @@ def _specialty_matches(service_name: str, specialties: str | None) -> bool:
                 required.update(specialties_for_keyword)
 
     return bool(required) and any(part in required for part in specialty_parts)
+
+
+def _technician_matches_service(db: Session, technician: models.Technician, service_name: str) -> bool:
+    """Prefer Phase-1 service eligibility when every selected check-in service maps exactly."""
+    requested_names = _split_csv(service_name)
+    if requested_names:
+        services = db.query(models.BookingService).filter(models.BookingService.is_active.is_(True)).all()
+        by_name = {service.name.strip().lower(): service.id for service in services}
+        mapped_ids = [by_name[name] for name in requested_names if name in by_name]
+        if len(mapped_ids) == len(requested_names):
+            eligible_ids = {item.service_id for item in technician.service_eligibilities}
+            return all(service_id in eligible_ids for service_id in mapped_ids)
+    return _specialty_matches(service_name, technician.specialties)
+
+
+def _transition_appointment(appointment: models.Appointment, new_status: str) -> None:
+    if appointment.status == new_status:
+        return
+    if new_status not in ALLOWED_APPOINTMENT_TRANSITIONS.get(appointment.status, set()):
+        raise BusinessRuleError(
+            f"An appointment cannot go from '{appointment.status}' to '{new_status}'"
+        )
+    appointment.status = new_status
+    appointment.updated_at = utc_now_naive()
+    appointment.events.append(
+        models.AppointmentEvent(
+            event_type=f"status_{new_status}",
+            old_starts_at_utc=appointment.starts_at_utc,
+            old_ends_at_utc=appointment.ends_at_utc,
+            new_starts_at_utc=appointment.starts_at_utc,
+            new_ends_at_utc=appointment.ends_at_utc,
+            created_at_utc=utc_now_naive(),
+        )
+    )
+
+
+def mark_appointment_checked_in(db: Session, appointment_id: int):
+    appointment = get_appointment(db, appointment_id)
+    if not appointment:
+        return None
+    _transition_appointment(appointment, "checked_in")
+    db.commit()
+    db.refresh(appointment)
+    return appointment
+
+
+def _appointment_for_turn_payload(db: Session, payload):
+    if not getattr(payload, "appointment_id", None):
+        return None
+    appointment = get_appointment(db, payload.appointment_id)
+    if not appointment:
+        raise BusinessRuleError("Appointment not found")
+    if appointment.status not in ("scheduled", "checked_in", "assigned"):
+        raise BusinessRuleError(f"A {appointment.status} appointment cannot create a turn")
+    if _digits(appointment.customer_phone) != _digits(payload.customer_phone):
+        raise BusinessRuleError("Appointment phone does not match the checked-in customer")
+    if appointment.status == "scheduled":
+        _transition_appointment(appointment, "checked_in")
+    if appointment.status == "checked_in":
+        _transition_appointment(appointment, "assigned")
+    if getattr(payload, "checkin_customer_id", None) and not appointment.external_customer_id:
+        appointment.external_customer_id = payload.checkin_customer_id
+    return appointment
+
+
+def _sync_appointment_from_turn(db: Session, turn: models.Turn, target_status: str) -> None:
+    if not turn.appointment_id:
+        return
+    appointment = get_appointment(db, turn.appointment_id)
+    if not appointment:
+        raise BusinessRuleError("Linked appointment not found")
+    if target_status == "assigned":
+        if appointment.status == "scheduled":
+            _transition_appointment(appointment, "checked_in")
+        if appointment.status == "checked_in":
+            _transition_appointment(appointment, "assigned")
+    elif target_status == "in_service":
+        _sync_appointment_from_turn(db, turn, "assigned")
+        if appointment.status == "assigned":
+            _transition_appointment(appointment, "in_service")
+    elif target_status == "done":
+        _sync_appointment_from_turn(db, turn, "in_service")
+        if appointment.status == "in_service":
+            _transition_appointment(appointment, "done")
+    elif target_status == "cancelled" and appointment.status not in FINISHED_TURN_STATUSES:
+        _transition_appointment(appointment, "cancelled")
 
 
 def _apply_status(db_turn: models.Turn, status: str, now: datetime | None = None) -> None:
@@ -576,13 +705,13 @@ def _get_active_turn_for_customer(db: Session, customer_name: str, customer_phon
 
 def _move_turn_to_today(db: Session, db_turn: models.Turn):
     """Re-dates an open turn that was NOT created today (e.g. left over from an earlier day)."""
-    if db_turn.created_at and db_turn.created_at.date() != date.today():
+    if db_turn.created_at and db_turn.created_at.date() != salon_today():
         now = _now()
         db_turn.created_at = now
         db_turn.turn_number = _get_next_turn_number_for_today(db)
-        if db_turn.assigned_at and db_turn.assigned_at.date() != date.today():
+        if db_turn.assigned_at and db_turn.assigned_at.date() != salon_today():
             db_turn.assigned_at = now
-        if db_turn.started_at and db_turn.started_at.date() != date.today():
+        if db_turn.started_at and db_turn.started_at.date() != salon_today():
             db_turn.started_at = now
         db.commit()
         db.refresh(db_turn)
@@ -639,7 +768,7 @@ def _choose_best_technician(db: Session, service_name: str, exclude_turn_id: int
     candidates = [
         tech
         for tech in technicians
-        if _specialty_matches(service_name, tech.specialties)
+        if _technician_matches_service(db, tech, service_name)
         and _is_technician_free_today(db, tech.id, exclude_turn_id)
     ]
     if not candidates:
@@ -664,6 +793,7 @@ def _assign_existing_turn(
     update_source_and_notes: bool = False,
 ):
     _ensure_technician_exists(db, payload.preferred_technician_id, "Preferred technician")
+    appointment = _appointment_for_turn_payload(db, payload)
 
     db_turn.service_name = payload.service_name
     db_turn.technician_id = technician.id
@@ -674,6 +804,14 @@ def _assign_existing_turn(
     db_turn.discount_type = payload.discount_type
     db_turn.discount_value = payload.discount_value
     db_turn.discount_label = payload.discount_label
+    if appointment:
+        db_turn.appointment_id = appointment.id
+    if getattr(payload, "checkin_customer_id", None):
+        db_turn.checkin_customer_id = payload.checkin_customer_id
+    if getattr(payload, "checkin_visit_id", None):
+        db_turn.checkin_visit_id = payload.checkin_visit_id
+    if payload.customer_phone:
+        db_turn.customer_phone_e164 = _digits(payload.customer_phone)
     if update_source_and_notes:
         db_turn.source = payload.source
         db_turn.notes = payload.notes
@@ -687,8 +825,13 @@ def _assign_existing_turn(
 # Turns: operations
 # ----------------------------
 def create_turn(db: Session, turn: schemas.TurnCreate):
+    if turn.checkin_visit_id:
+        existing = db.query(models.Turn).filter(models.Turn.checkin_visit_id == turn.checkin_visit_id).first()
+        if existing:
+            return existing
     _ensure_technician_exists(db, turn.technician_id)
     _ensure_technician_exists(db, turn.preferred_technician_id, "Preferred technician")
+    appointment = _appointment_for_turn_payload(db, turn)
 
     now = _now()
 
@@ -696,6 +839,10 @@ def create_turn(db: Session, turn: schemas.TurnCreate):
         turn_number=_get_next_turn_number_for_today(db),
         customer_name=turn.customer_name,
         customer_phone=turn.customer_phone,
+        customer_phone_e164=_digits(turn.customer_phone),
+        checkin_customer_id=turn.checkin_customer_id,
+        checkin_visit_id=turn.checkin_visit_id,
+        appointment_id=appointment.id if appointment else None,
         service_name=turn.service_name,
         source=turn.source,
         preferred_technician_id=turn.preferred_technician_id,
@@ -730,12 +877,19 @@ def assign_next_turn(db: Session, payload: schemas.AssignTurnRequest):
             discount_label=payload.discount_label,
             assigned_by=payload.assigned_by or "manual",
             notes=payload.notes,
+            appointment_id=payload.appointment_id,
+            checkin_customer_id=payload.checkin_customer_id,
+            checkin_visit_id=payload.checkin_visit_id,
             status="assigned",
         ),
     )
 
 
 def assign_turn_auto(db: Session, payload: schemas.AutoAssignTurnRequest):
+    if payload.checkin_visit_id:
+        existing_by_visit = db.query(models.Turn).filter(models.Turn.checkin_visit_id == payload.checkin_visit_id).first()
+        if existing_by_visit:
+            return existing_by_visit
     existing_turn = _get_active_turn_for_customer(db, payload.customer_name, payload.customer_phone)
 
     if existing_turn:
@@ -767,11 +921,18 @@ def assign_turn_auto(db: Session, payload: schemas.AutoAssignTurnRequest):
             discount_value=payload.discount_value,
             discount_label=payload.discount_label,
             status="assigned",
+            appointment_id=payload.appointment_id,
+            checkin_customer_id=payload.checkin_customer_id,
+            checkin_visit_id=payload.checkin_visit_id,
         ),
     )
 
 
 def assign_turn_preferred(db: Session, payload: schemas.AssignPreferredTurnRequest):
+    if payload.checkin_visit_id:
+        existing_by_visit = db.query(models.Turn).filter(models.Turn.checkin_visit_id == payload.checkin_visit_id).first()
+        if existing_by_visit:
+            return existing_by_visit
     existing_turn = _get_active_turn_for_customer(db, payload.customer_name, payload.customer_phone)
     if existing_turn:
         existing_turn = _move_turn_to_today(db, existing_turn)
@@ -783,7 +944,7 @@ def assign_turn_preferred(db: Session, payload: schemas.AssignPreferredTurnReque
         raise BusinessRuleError("Preferred technician not found")
     if not _is_bookable(technician):
         raise BusinessRuleError("Preferred technician is not available today")
-    if not _specialty_matches(payload.service_name, technician.specialties):
+    if not _technician_matches_service(db, technician, payload.service_name):
         raise BusinessRuleError("Preferred technician does not match the selected service")
     if not _is_technician_free_today(db, technician.id, existing_turn.id if existing_turn else None):
         raise BusinessRuleError("This technician is already assigned to another customer")
@@ -808,6 +969,9 @@ def assign_turn_preferred(db: Session, payload: schemas.AssignPreferredTurnReque
             discount_type=payload.discount_type,
             discount_value=payload.discount_value,
             discount_label=payload.discount_label,
+            appointment_id=payload.appointment_id,
+            checkin_customer_id=payload.checkin_customer_id,
+            checkin_visit_id=payload.checkin_visit_id,
         ),
     )
 
@@ -836,6 +1000,7 @@ def update_turn_status(db: Session, turn_id: int, status: str):
         return None
 
     _transition(db_turn, status)
+    _sync_appointment_from_turn(db, db_turn, status)
     db.commit()
     db.refresh(db_turn)
     return db_turn
@@ -854,7 +1019,7 @@ def reassign_turn(db: Session, turn_id: int, payload: schemas.ReassignTurnReques
         raise BusinessRuleError("Technician not found")
     if not _is_bookable(technician):
         raise BusinessRuleError("Technician is not available today")
-    if not _specialty_matches(db_turn.service_name, technician.specialties):
+    if not _technician_matches_service(db, technician, db_turn.service_name):
         raise BusinessRuleError("Technician does not match this customer's selected service")
     if technician.id != db_turn.technician_id and not _is_technician_free_today(db, technician.id):
         raise BusinessRuleError("This technician is already assigned to another customer")
@@ -882,6 +1047,7 @@ def start_turn_service(db: Session, turn_id: int, payload: schemas.TurnStartRequ
         return None
 
     _transition(db_turn, "in_service")
+    _sync_appointment_from_turn(db, db_turn, "in_service")
     if payload.notes:
         db_turn.notes = payload.notes
 
@@ -896,6 +1062,7 @@ def complete_turn_service(db: Session, turn_id: int, payload: schemas.TurnComple
         return None
 
     _transition(db_turn, "done")
+    _sync_appointment_from_turn(db, db_turn, "done")
     if payload.notes:
         db_turn.notes = payload.notes
 
@@ -948,7 +1115,7 @@ def delete_inventory_item(db: Session, item_id: int):
 
 
 def get_inventory_summary(db: Session):
-    today = date.today()
+    today = salon_today()
     week_start = today - timedelta(days=today.weekday())
 
     total_inventory_value = 0.0
@@ -1038,6 +1205,8 @@ def _validate_checkout_links(db: Session, payload: schemas.CheckoutCreate):
         raise BusinessRuleError("A cancelled turn cannot be checked out")
     if payload.technician_id and payload.technician_id != turn.technician_id:
         raise BusinessRuleError("Technician does not match the technician on this turn")
+    if payload.appointment_id and turn.appointment_id and payload.appointment_id != turn.appointment_id:
+        raise BusinessRuleError("Appointment does not match the appointment on this turn")
 
     already_paid = db.query(models.Checkout.id).filter(models.Checkout.turn_id == payload.turn_id).first()
     if already_paid:
@@ -1053,11 +1222,14 @@ def create_checkout(db: Session, payload: schemas.CheckoutCreate):
     values.update(_calculate_checkout(payload))
     if turn and not values.get("technician_id"):
         values["technician_id"] = turn.technician_id
+    if turn and turn.appointment_id:
+        values["appointment_id"] = turn.appointment_id
 
     # Mark the turn done in the SAME transaction, so a checkout can't exist without it.
     # Transition first: if it is refused, nothing has been added to the session yet.
     if turn:
         _transition(turn, "done")
+        _sync_appointment_from_turn(db, turn, "done")
 
     db_checkout = models.Checkout(**values)
     db.add(db_checkout)
