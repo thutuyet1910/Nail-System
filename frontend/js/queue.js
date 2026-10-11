@@ -40,7 +40,7 @@ function isTechnicianBusyToday(technicianId, excludeTurnId = null) {
 // Fills the technician dropdown with technicians who are available today and qualified for
 // the service. For a reassign it also leaves out the customer's current technician and anyone
 // who is busy, because the backend refuses both. (The backend makes the final decision.)
-function populatePreferredTechSelect(serviceName = "", { excludeTechnicianId = null, onlyFree = false } = {}) {
+function populatePreferredTechSelect(serviceName = "", { excludeTechnicianId = null, onlyFree = false, eligibleTechnicianIds = null } = {}) {
     if (!preferredTechSelect) return;
 
     preferredTechSelect.innerHTML = `<option value="">Select technician</option>`;
@@ -48,7 +48,10 @@ function populatePreferredTechSelect(serviceName = "", { excludeTechnicianId = n
     const availableTechs = techniciansRaw.filter((tech) => {
         const isAvailable = isAvailableToday(tech);
         const isExcluded = excludeTechnicianId !== null && Number(tech.id) === Number(excludeTechnicianId);
-        const canDoService = !serviceName || serviceMatchesTechSpecialties(serviceName, tech.specialties);
+        // ID-backed check-ins: the Owner catalog's eligibility is authoritative; legacy visits use specialty text.
+        const canDoService = Array.isArray(eligibleTechnicianIds)
+            ? eligibleTechnicianIds.includes(Number(tech.id))
+            : (!serviceName || serviceMatchesTechSpecialties(serviceName, tech.specialties));
         const isFree = !onlyFree || !isTechnicianBusyToday(tech.id);
 
         return isAvailable && !isExcluded && canDoService && isFree;
@@ -236,7 +239,10 @@ function getBookedTechnicianPlan(item, ownTurnId = null) {
     if (!tech) return { mode: "auto" };
 
     const serviceName = getCombinedServiceName(item);
-    if (!isAvailableToday(tech) || !serviceMatchesTechSpecialties(serviceName, tech.specialties)) {
+    const qualified = Array.isArray(item.eligible_technician_ids)
+        ? item.eligible_technician_ids.includes(Number(tech.id))
+        : serviceMatchesTechSpecialties(serviceName, tech.specialties);
+    if (!isAvailableToday(tech) || !qualified) {
         return { mode: "auto" };
     }
 
@@ -255,6 +261,7 @@ function getBookedTechnicianPlan(item, ownTurnId = null) {
 async function autoAssignCheckin(item, bookedTechId = null) {
     const serviceName = getCombinedServiceName(item);
     if (!serviceName) return null;
+    if (item.unavailable_service_ids?.length) return null;  // a selected service was deactivated: leave the visit queued, flagged
 
     const body = {
         customer_name: item.full_name,
@@ -265,6 +272,7 @@ async function autoAssignCheckin(item, bookedTechId = null) {
         discount_value: Number(item.discount_value || 0),
         discount_label: item.discount_label || null
     };
+    if (item.service_ids?.length) body.service_ids = item.service_ids;  // ID-first; the backend never falls back to the name
     if (item.visit_id) body.checkin_visit_id = item.visit_id;
     if (item.customer_id) body.checkin_customer_id = item.customer_id;
     if (item.appointment_match?.outcome === "exact_match") {
@@ -399,7 +407,7 @@ async function openPreferredTechModal(item) {
     pendingPreferredCheckinItem = item;
     pendingReassignTurn = null;
 
-    populatePreferredTechSelect(serviceName);
+    populatePreferredTechSelect(serviceName, { eligibleTechnicianIds: item.eligible_technician_ids ?? null });
 
     preferredTechSelect.value = "";
     setPreferredTechModalText("Select Preferred Technician", "Assign");
@@ -476,6 +484,11 @@ async function submitPreferredAssignment(selectedTechId) {
         return;
     }
 
+    if (pendingPreferredCheckinItem.unavailable_service_ids?.length) {
+        showCuteNotification("A service this customer selected is no longer offered. Please ask them to choose again.", "Notice");
+        return;
+    }
+
     try {
         const serviceName = getCombinedServiceName(pendingPreferredCheckinItem);
         const matchedAppointment = getAppointmentForCheckin(pendingPreferredCheckinItem);
@@ -486,6 +499,7 @@ async function submitPreferredAssignment(selectedTechId) {
                 customer_name: pendingPreferredCheckinItem.full_name,
                 customer_phone: pendingPreferredCheckinItem.phone_number,
                 service_name: serviceName,
+                ...(pendingPreferredCheckinItem.service_ids?.length ? { service_ids: pendingPreferredCheckinItem.service_ids } : {}),
                 preferred_technician_id: selectedTechId,
                 source: "checkin",
                 discount_type: pendingPreferredCheckinItem.discount_type || null,
@@ -605,6 +619,7 @@ function renderLiveCheckinQueue(checkins) {
         </div>
         <div class="person-divider"></div>
         <p class="person-detail"><strong>Services:</strong><span>${escapeHtml((item.services || []).join(", ") || "-")}</span></p>
+        ${item.unavailable_service_ids?.length ? `<p class="service-form-error" role="alert">A selected service is no longer offered. Ask the customer to choose again; they stay in the queue.</p>` : ""}
         <button class="mini-btn assign-btn queue-preferred-btn" data-name="${escapeHtml(item.full_name)}" data-phone="${escapeHtml(item.phone_number)}">${UI_ICONS.user}Assign Preferred</button>
       </div>`).join("");
 

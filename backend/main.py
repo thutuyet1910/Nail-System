@@ -473,6 +473,8 @@ def get_integrated_checkins(
             if not isinstance(raw, dict) or any(key not in raw for key in required):
                 raise CustomerGatewayError("Check-in service returned malformed queue data")
             checked_in_at = datetime.fromisoformat(raw["checked_in_at"]) if isinstance(raw["checked_in_at"], str) else raw["checked_in_at"]
+            visit_service_ids = checkin_service.parse_service_ids(raw.get("service_ids"))
+            unavailable_ids, eligible_ids = checkin_service.visit_service_availability(db, visit_service_ids)
             result = checkin_service.match_checkin_to_appointment(
                 db,
                 customer_phone=raw.get("phone_e164") or raw["phone_number"],
@@ -495,6 +497,9 @@ def get_integrated_checkins(
             output.append({
                 **raw,
                 "phone_e164": normalize_us_phone(raw.get("phone_e164") or raw["phone_number"]).e164,
+                "service_ids": visit_service_ids,
+                "unavailable_service_ids": unavailable_ids,
+                "eligible_technician_ids": eligible_ids,
                 "appointment_match": {
                     "outcome": result.outcome,
                     "appointment": result.appointment,

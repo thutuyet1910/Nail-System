@@ -3617,3 +3617,172 @@ class TestIdFirstCheckinServiceResolution:
         assert [s["service_name_snapshot"] for s in ok.json()["appointment_services"]] == ["Gel Manicure"]
         bad = client.post("/appointments", json=_booking_payload(tech_id, datetime.combine(day, time(13, 0)), [999999], service_name="Gel Manicure"))
         assert bad.status_code == 400
+
+
+# ── Check-In service_ids -> Owner assignment ──────────────────────────────────
+
+def _checkin_item(visit_id=501, services=("Gel Manicure",), phone="6025551234", **extra):
+    item = {
+        "visit_id": visit_id, "customer_id": 24, "position": 1, "full_name": "Ida Checkin",
+        "phone_number": phone, "phone_e164": "+1" + phone,
+        "checked_in_at": datetime.combine(date.today(), time(11, 55)).isoformat(),
+        "services": list(services),
+    }
+    item.update(extra)
+    return item
+
+
+class _checkins_from:
+    """Context manager: Check-In's /today-checkins returns these items."""
+    def __init__(self, *items):
+        self.items = list(items)
+
+    def __enter__(self):
+        items = self.items
+
+        class Gateway:
+            def get_today_checkins(self):
+                return items
+
+        app.dependency_overrides[main_module.get_customer_gateway] = lambda: Gateway()
+        return self
+
+    def __exit__(self, *exc):
+        app.dependency_overrides.pop(main_module.get_customer_gateway, None)
+
+
+def _queue():
+    return client.get("/checkins/today")
+
+
+def _turn_body_from(item, **extra):
+    """What the dashboard posts for a queue item (see queue.js autoAssignCheckin)."""
+    body = {
+        "customer_name": item["full_name"], "customer_phone": item["phone_number"],
+        "service_name": ", ".join(item["services"]), "source": "checkin",
+        "checkin_visit_id": item["visit_id"], "checkin_customer_id": item["customer_id"],
+    }
+    if item.get("service_ids"):
+        body["service_ids"] = item["service_ids"]
+    body.update(extra)
+    return body
+
+
+def _only_eligible(name, service_id):
+    """A technician whose ONLY route to the service is the Owner catalog, not specialty text."""
+    tech_id = make_tech(name, specialties="waxing").json()["id"]
+    assert client.put(f"/booking-services/{service_id}/technicians", json={"technician_ids": [tech_id]}).status_code == 200
+    return tech_id
+
+
+class TestCheckinServiceIdsFlow:
+    def test_service_ids_are_parsed_and_exposed_with_names_untouched(self):
+        gel = _catalog()["Gel Manicure"]["id"]
+        tech = _only_eligible("Flow Tech", gel)
+        with _checkins_from(_checkin_item(service_ids=[gel])):
+            response = _queue()
+        assert response.status_code == 200
+        item = response.json()["checkins"][0]
+        assert item["service_ids"] == [gel] and item["services"] == ["Gel Manicure"]
+        assert item["unavailable_service_ids"] == [] and item["eligible_technician_ids"] == [tech]
+
+    def test_service_ids_propagate_into_auto_assignment_and_canonical_name_wins(self):
+        gel = _catalog()["Gel Manicure"]["id"]
+        tech = _only_eligible("Auto Flow Tech", gel)
+        make_tech("Name Match Tech", specialties="manicure / pedicure, gel")  # would win on the name path
+        with _checkins_from(_checkin_item(services=["whatever text Check-In stored"], service_ids=[gel])):
+            item = _queue().json()["checkins"][0]
+        turn = client.post("/turns/assign-auto", json=_turn_body_from(item))
+        assert turn.status_code == 200, turn.text
+        assert turn.json()["technician_id"] == tech
+        assert turn.json()["service_name"] == "Gel Manicure"
+
+    def test_service_ids_propagate_into_preferred_and_assign_next(self):
+        gel = _catalog()["Gel Manicure"]["id"]
+        tech = _only_eligible("Pref Flow Tech", gel)
+        with _checkins_from(_checkin_item(visit_id=601, service_ids=[gel]), _checkin_item(visit_id=602, phone="6025550002", service_ids=[gel])):
+            items = _queue().json()["checkins"]
+        preferred = client.post("/turns/assign-preferred", json=_turn_body_from(items[0], preferred_technician_id=tech))
+        assert preferred.status_code == 200 and preferred.json()["technician_id"] == tech
+        manual = client.post("/turns/assign-next", json=_turn_body_from(items[1], technician_id=tech))
+        assert manual.status_code == 200 and manual.json()["service_name"] == "Gel Manicure"
+        bad = client.post("/turns/assign-next", json=_turn_body_from(items[1], technician_id=tech, service_ids=[999999], checkin_visit_id=603))
+        assert bad.status_code == 400
+
+    def test_renamed_service_still_assigns_by_id_with_the_new_name(self):
+        gel = _catalog()["Gel Manicure"]["id"]
+        tech = _only_eligible("Rename Flow Tech", gel)
+        with _checkins_from(_checkin_item(service_ids=[gel])):
+            item = _queue().json()["checkins"][0]  # Check-In still shows the old name snapshot
+        client.patch(f"/booking-services/{gel}", json={"name": "Gel Mani Deluxe"})
+        turn = client.post("/turns/assign-auto", json=_turn_body_from(item))
+        assert turn.status_code == 200 and turn.json()["technician_id"] == tech
+        assert turn.json()["service_name"] == "Gel Mani Deluxe"
+
+    def test_malformed_service_ids_fail_safely(self):
+        for bad in ("10", 10, [1.5], ["a"], [True], [-3], [0], [1] * 21, {"id": 1}, [[1]]):
+            with _checkins_from(_checkin_item(service_ids=bad)):
+                response = _queue()
+            assert response.status_code == 503, bad
+            assert "malformed service ids" in response.json()["detail"]
+        assert client.get("/turns").json() == []
+
+    def test_unknown_and_inactive_ids_are_flagged_and_never_fall_back_to_the_name(self):
+        make_tech("Fallback Tech", specialties="manicure / pedicure, gel")
+        gel = _catalog()["Gel Manicure"]["id"]
+        client.patch(f"/booking-services/{gel}", json={"is_active": False})
+        with _checkins_from(_checkin_item(visit_id=701, service_ids=[gel]), _checkin_item(visit_id=702, phone="6025550003", service_ids=[999999])):
+            items = _queue().json()["checkins"]
+        assert [i["visit_id"] for i in items] == [701, 702]  # the visits are preserved
+        assert items[0]["unavailable_service_ids"] == [gel] and items[0]["eligible_technician_ids"] == []
+        assert items[1]["unavailable_service_ids"] == [999999] and items[1]["eligible_technician_ids"] == []
+        for item in items:
+            assert client.post("/turns/assign-auto", json=_turn_body_from(item)).status_code == 400
+            assert client.post("/turns/assign-preferred", json=_turn_body_from(item, preferred_technician_id=1)).status_code == 400
+        assert client.get("/turns").json() == []
+
+    def test_deactivation_after_check_in_is_flagged_then_clears_on_reactivation(self):
+        gel = _catalog()["Gel Manicure"]["id"]
+        _only_eligible("Toggle Tech", gel)
+        with _checkins_from(_checkin_item(service_ids=[gel])):
+            assert _queue().json()["checkins"][0]["unavailable_service_ids"] == []
+            client.patch(f"/booking-services/{gel}", json={"is_active": False})
+            assert _queue().json()["checkins"][0]["unavailable_service_ids"] == [gel]
+            client.patch(f"/booking-services/{gel}", json={"is_active": True})
+            item = _queue().json()["checkins"][0]
+        assert item["unavailable_service_ids"] == [] and client.post("/turns/assign-auto", json=_turn_body_from(item)).status_code == 200
+
+    def test_legacy_visits_without_or_with_empty_service_ids_use_the_name_path(self):
+        tech = make_tech("Legacy Flow Tech", specialties="acrylic").json()["id"]
+        with _checkins_from(_checkin_item(visit_id=801, services=["Acrylic Full Set"]),
+                            _checkin_item(visit_id=802, phone="6025550004", services=["Acrylic Full Set"], service_ids=[])):
+            items = _queue().json()["checkins"]
+        for item in items:
+            assert item["service_ids"] == [] and item["eligible_technician_ids"] is None and item["unavailable_service_ids"] == []
+        first = client.post("/turns/assign-auto", json=_turn_body_from(items[0]))
+        assert first.status_code == 200 and first.json()["technician_id"] == tech
+        assert first.json()["service_name"] == "Acrylic Full Set"
+        assert client.post("/turns/assign-auto", json=_turn_body_from(items[1])).status_code in (200, 400)  # tech is busy: legacy rules apply
+
+    def test_same_visit_never_creates_a_duplicate_turn(self):
+        gel = _catalog()["Gel Manicure"]["id"]
+        _only_eligible("Dedupe Tech", gel)
+        with _checkins_from(_checkin_item(visit_id=901, service_ids=[gel])):
+            item = _queue().json()["checkins"][0]
+        first = client.post("/turns/assign-auto", json=_turn_body_from(item)).json()
+        second = client.post("/turns/assign-auto", json=_turn_body_from(item)).json()
+        assert first["id"] == second["id"] and len(client.get("/turns").json()) == 1
+
+    def test_appointment_match_and_link_still_work_with_service_ids(self):
+        gel = _catalog()["Gel Manicure"]["id"]
+        make_tech("Link Tech", specialties="manicure / pedicure, gel")
+        appointment = make_appointment(customer_phone="6025551234").json()
+        with _checkins_from(_checkin_item(visit_id=951, service_ids=[gel])):
+            item = _queue().json()["checkins"][0]
+        assert item["appointment_match"]["outcome"] == "exact_match"
+        turn = client.post("/turns/assign-auto", json=_turn_body_from(item, appointment_id=item["appointment_match"]["appointment"]["id"]))
+        assert turn.status_code == 200 and turn.json()["appointment_id"] == appointment["id"]
+
+    def test_voice_allowlist_unchanged(self):
+        assert {tool["name"] for tool in voice_tools.READ_ONLY_TOOL_DEFINITIONS} == {
+            "get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback"}

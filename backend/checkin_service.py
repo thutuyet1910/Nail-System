@@ -8,6 +8,44 @@ from phone_normalization import PhoneNormalizationError, normalize_us_phone
 
 
 ARRIVAL_APPOINTMENT_STATUSES = ("scheduled", "checked_in")
+MAX_VISIT_SERVICE_IDS = 20
+
+
+def parse_service_ids(value) -> list[int]:
+    """Check-In's service_ids: absent/None/[] = legacy visit (name path). Anything else must be a
+    list of at most 20 positive integers; a malformed payload is rejected, never guessed at."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_VISIT_SERVICE_IDS:
+        raise ValueError("Check-in service returned malformed service ids")
+    parsed: list[int] = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int) or item <= 0:
+            raise ValueError("Check-in service returned malformed service ids")
+        if item not in parsed:
+            parsed.append(item)
+    return parsed
+
+
+def visit_service_availability(db: Session, service_ids: list[int]) -> tuple[list[int], list[int] | None]:
+    """(unavailable_ids, eligible_technician_ids). Legacy visits (no ids) -> ([], None).
+    If any id is unknown or was deactivated after check-in, nobody is eligible: the visit is kept in
+    the queue and flagged, and the assignment endpoints refuse it (no name fallback)."""
+    if not service_ids:
+        return [], None
+    active = {
+        row[0] for row in db.query(models.BookingService.id)
+        .filter(models.BookingService.id.in_(service_ids), models.BookingService.is_active.is_(True)).all()
+    }
+    unavailable = [service_id for service_id in service_ids if service_id not in active]
+    if unavailable:
+        return unavailable, []
+    required = set(service_ids)
+    technicians = db.query(models.Technician).filter(models.Technician.is_active.is_(True)).order_by(models.Technician.id).all()
+    return [], [
+        technician.id for technician in technicians
+        if required.issubset({item.service_id for item in technician.service_eligibilities})
+    ]
 
 
 @dataclass(frozen=True)

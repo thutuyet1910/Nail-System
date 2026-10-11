@@ -405,6 +405,11 @@ class IntegratedCheckinOut(BaseModel):
     phone_e164: str
     checked_in_at: datetime
     services: list[str] = []
+    service_ids: list[int] = []
+    # ids that are unknown/inactive in the Owner catalog now (e.g. deactivated after check-in)
+    unavailable_service_ids: list[int] = []
+    # technicians eligible for every service id; None for legacy (name-only) visits
+    eligible_technician_ids: Optional[list[int]] = None
     discount_type: Optional[str] = None
     discount_value: float = 0
     discount_label: Optional[str] = None
