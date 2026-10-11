@@ -110,7 +110,7 @@ Current expected result:
 ## Main API Endpoints
 
 - `GET /`
-- `GET /services`
+- `GET /services` — active services proxied from the Owner catalog (`OWNER_API_BASE` + `CHECKIN_INTERNAL_SERVICE_TOKEN`, server-side only); `/today-checkins` returns `service_ids` plus legacy `services` names
 - `POST /customers/new`
 - `GET /customers`
 - `GET /customers/{phone_number}`

@@ -51,15 +51,9 @@ client.headers.update({"X-Internal-Service-Token": "test-internal-token"})
 
 @pytest.fixture(autouse=True)
 def reset_db():
-    """Fresh tables + the default services before every test."""
+    """Fresh tables before every test (the Owner catalog is faked in conftest.py)."""
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
-
-    # /services no longer seeds on every request (only at startup), and TestClient
-    # without `with` skips startup, so seed here.
-    db = TestingSessionLocal()
-    main_module.seed_services(db)
-    db.close()
     yield
 
 
@@ -244,13 +238,6 @@ class TestInternalServiceAuthentication:
     def test_secret_is_not_exposed(self):
         assert "test-internal-token" not in str(client.get("/").json())
         assert "test-internal-token" not in str(client.get("/queue-status").json())
-
-    def test_services_are_seeded_and_listed(self):
-        r = client.get("/services")
-        assert r.status_code == 200
-        names = [s["name"] for s in r.json()]
-        assert "Gel Manicure" in names
-        assert len(names) == len(main_module.DEFAULT_SERVICES)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

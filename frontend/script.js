@@ -306,6 +306,12 @@ function formatServiceNamesFromIds(ids) {
   return ids.map(getServiceNameById).join(", ");
 }
 
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
 function renderServiceList(picker) {
   const { list, search, selected } = picker;
   if (!list) return;
@@ -325,7 +331,7 @@ function renderServiceList(picker) {
       return `
         <label class="service-option" for="${inputId}">
           <input type="checkbox" id="${inputId}" value="${service.id}" ${checked} />
-          <span>${service.name}</span>
+          <span>${escapeHtml(service.name)}</span>
         </label>`;
     })
     .join("");
@@ -353,6 +359,16 @@ async function loadServices() {
   try {
     const data = await api("/services", { fallback: "Failed to load services." });
     availableServices = Array.isArray(data) ? data : [];
+
+    // The catalog comes from the Owner (via the Check-In backend) and can change at any time:
+    // drop selections that are no longer offered so they are never submitted.
+    const activeIds = new Set(availableServices.map((s) => s.id));
+    [selectedNewServiceIds, selectedExistingServiceIds].forEach((selected) => {
+      for (let i = selected.length - 1; i >= 0; i--) {
+        if (!activeIds.has(selected[i])) selected.splice(i, 1);
+      }
+    });
+
     renderServiceList(newPicker);
     renderServiceList(existingPicker);
   } catch (error) {
@@ -457,6 +473,7 @@ function openExistingCustomerScreen() {
 
 function showExistingCustomerServiceScreen() {
   renderServiceList(existingPicker);
+  loadServices(); // re-fetch so renamed/deactivated services show up without a page reload
   showScreen(screens.existingServices);
   setMessage();
 }
@@ -499,6 +516,7 @@ function buildNewCustomerPayload() {
 
 function showNewCustomerServiceScreen() {
   renderServiceList(newPicker);
+  loadServices(); // re-fetch so renamed/deactivated services show up without a page reload
   showScreen(screens.newServices);
   setMessage();
 }
@@ -766,6 +784,7 @@ if (confirmNewCustomerBtn) {
       showThankYouScreen("thankYouNew", servicesForThanks);
     } catch (error) {
       console.error("New customer confirm error:", error);
+      loadServices(); // the chosen service may have been removed by the Owner; refresh the list
       messageBox.textContent = error.message || "Failed to save customer.";
       messageBox.className = "message error";
       messageBox.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -894,6 +913,7 @@ if (confirmExistingCustomerBtn) {
       showThankYouScreen("thankYouExisting", servicesForThanks);
     } catch (error) {
       console.error("Returning customer confirm error:", error);
+      loadServices(); // the chosen service may have been removed by the Owner; refresh the list
       messageBox.textContent = error.message || "Failed to process returning customer.";
       messageBox.className = "message error";
       messageBox.scrollIntoView({ behavior: "smooth", block: "center" });

@@ -66,9 +66,18 @@ class Visit(Base):
 
     customer = relationship("Customer", back_populates="visits")
     visit_services = relationship("VisitService", back_populates="visit", cascade="all, delete-orphan")
+    owner_services = relationship(
+        "VisitOwnerService",
+        back_populates="visit",
+        cascade="all, delete-orphan",
+        order_by="VisitOwnerService.id",
+    )
 
 
 class Service(Base):
+    """LEGACY local catalog. No longer used for new selections (Owner booking_services is
+    authoritative); kept only so historical visit_services rows stay readable."""
+
     __tablename__ = "services"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -87,6 +96,26 @@ class VisitService(Base):
 
     visit = relationship("Visit", back_populates="visit_services")
     service = relationship("Service", back_populates="visit_services")
+
+
+class VisitOwnerService(Base):
+    """A service chosen at check-in, keyed by the Owner's stable BookingService id.
+
+    `service_name` is the display name at check-in time (a snapshot for history); integrations
+    should use `owner_service_id`. Legacy visits have rows in `visit_services` instead.
+    """
+
+    __tablename__ = "visit_owner_services"
+    __table_args__ = (
+        Index("uq_visit_owner_service", "visit_id", "owner_service_id", unique=True),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    visit_id = Column(Integer, ForeignKey("visits.id"), nullable=False, index=True)
+    owner_service_id = Column(Integer, nullable=False)
+    service_name = Column(String, nullable=False)
+
+    visit = relationship("Visit", back_populates="owner_services")
 
 
 class ReferralUsage(Base):

@@ -17,6 +17,7 @@ from .email_utils import send_birthday_email, send_referral_discount_email
 from .scheduler import scheduler
 from .timeutils import SALON_TZ, now_local, today_local
 from .phone_normalization import normalize_us_phone
+from .owner_catalog import CatalogService, CatalogUnavailable, catalog
 from .security import require_internal_service
 
 logging.basicConfig(level=logging.INFO)
@@ -33,35 +34,6 @@ REFERRAL_CODE_UNLOCK_VISITS = 5
 LOYALTY_EVERY_N_VISITS = 10
 LOYALTY_DISCOUNT_PERCENT = 10
 REMINDER_WINDOW_DAYS = 5
-
-DEFAULT_SERVICES = [
-    "Acrylic Full Set",
-    "Acrylic Fill",
-    "Gel Full Set",
-    "Gel Fill",
-    "Dip Powder",
-    "Pink and White",
-    "Ombre Nails",
-    "Builder Gel",
-    "Classic Manicure",
-    "Gel Manicure",
-    "Deluxe Manicure",
-    "Classic Pedicure",
-    "Deluxe Pedicure",
-    "Spa Pedicure",
-    "Jelly Pedicure",
-    "Polish Change - Hands",
-    "Polish Change - Feet",
-    "Nail Repair",
-    "Nail Removal",
-    "French Tip",
-    "Nail Art",
-    "Chrome / Cat Eye",
-    "Paraffin Treatment",
-    "Waxing - Eyebrows",
-    "Waxing - Lip",
-    "Waxing - Chin",
-]
 
 
 # ----------------------------
@@ -111,19 +83,6 @@ def ensure_unique_indexes() -> None:
 
 ensure_columns()
 ensure_unique_indexes()
-
-
-def seed_services(db: Session) -> None:
-    existing_names = {item.name.strip().lower() for item in db.query(models.Service).all()}
-
-    created = False
-    for service_name in DEFAULT_SERVICES:
-        if service_name.strip().lower() not in existing_names:
-            db.add(models.Service(name=service_name.strip(), is_active=True))
-            created = True
-
-    if created:
-        db.commit()
 
 
 # ----------------------------
@@ -178,20 +137,49 @@ def _get_visit_today(db: Session, customer_id: int):
     )
 
 
-def _get_selected_services_or_404(db: Session, service_ids: list[int]) -> list[models.Service]:
+def _catalog_or_503(force_refresh: bool = False) -> list[CatalogService]:
+    try:
+        return catalog.get_services(force_refresh=force_refresh)
+    except CatalogUnavailable:
+        raise HTTPException(
+            status_code=503,
+            detail="Services are temporarily unavailable. Please ask the front desk for help.",
+        )
+
+
+def _get_selected_services_or_404(service_ids: list[int]) -> list[CatalogService]:
+    """Resolves the chosen ids against the Owner catalog (active services only).
+
+    The catalog is force-refreshed (rate-limited inside the client) so a service the Owner just
+    deactivated is not accepted from a stale cache. An unknown/inactive id is rejected so the
+    customer reselects; it is never remapped to another service or matched by name.
+    """
     unique_ids = list(dict.fromkeys(service_ids))
-    services = (
-        db.query(models.Service)
-        .filter(models.Service.id.in_(unique_ids), models.Service.is_active.is_(True))
-        .order_by(models.Service.name.asc())
-        .all()
-    )
+    by_id = {service.id: service for service in _catalog_or_503(force_refresh=True)}
+    if any(service_id not in by_id for service_id in unique_ids):
+        raise HTTPException(
+            status_code=404,
+            detail="One or more selected services are no longer available. Please reselect your services.",
+        )
+    return [by_id[service_id] for service_id in unique_ids]
 
-    if len(services) != len(unique_ids):
-        raise HTTPException(status_code=404, detail="One or more selected services were not found.")
 
-    service_by_id = {service.id: service for service in services}
-    return [service_by_id[service_id] for service_id in unique_ids]
+def _visit_services(visit: models.Visit) -> tuple[list[str], list[int]]:
+    """(display names, Owner service ids) for a visit.
+
+    New visits store Owner ids + a name snapshot in `visit_owner_services`. Legacy visits only
+    have a local `visit_services` -> `services` name; they contribute names but no ids.
+    """
+    names = [item.service_name for item in visit.owner_services]
+    ids = [item.owner_service_id for item in visit.owner_services]
+    names += [item.service.name for item in visit.visit_services]
+    return names, ids
+
+
+_VISIT_SERVICE_LOADS = (
+    joinedload(models.Visit.visit_services).joinedload(models.VisitService.service),
+    joinedload(models.Visit.owner_services),
+)
 
 
 def _commit_or_400(db: Session, conflict_detail: str) -> None:
@@ -381,12 +369,6 @@ def run_scheduled_birthday_reminders() -> None:
 # ----------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    db = SessionLocal()
-    try:
-        seed_services(db)
-    finally:
-        db.close()
-
     if not scheduler.running:
         scheduler.add_job(
             run_scheduled_birthday_reminders,
@@ -429,13 +411,13 @@ def read_root():
 # Services
 # ----------------------------
 @app.get("/services", response_model=list[schemas.ServiceResponse])
-def get_services(db: Session = Depends(get_db)):
-    return (
-        db.query(models.Service)
-        .filter(models.Service.is_active.is_(True))
-        .order_by(models.Service.name.asc())
-        .all()
-    )
+def get_services():
+    """Active services from the Owner catalog (cached briefly). The browser never talks to the
+    Owner directly and never sees the internal token."""
+    return [
+        {"id": s.id, "name": s.name, "category": s.category, "duration_minutes": s.duration_minutes}
+        for s in _catalog_or_503()
+    ]
 
 
 # ----------------------------
@@ -558,7 +540,7 @@ def get_customer_visits(phone_number: str, db: Session = Depends(get_db), _=Depe
 
     visits = (
         db.query(models.Visit)
-        .options(joinedload(models.Visit.visit_services).joinedload(models.VisitService.service))
+        .options(*_VISIT_SERVICE_LOADS)
         .filter(models.Visit.customer_id == customer.id)
         .order_by(models.Visit.checked_in_at.desc())
         .all()
@@ -574,7 +556,8 @@ def get_customer_visits(phone_number: str, db: Session = Depends(get_db), _=Depe
                 "id": visit.id,
                 "visit_date": visit.visit_date,
                 "checked_in_at": visit.checked_in_at,
-                "services": [item.service.name for item in visit.visit_services],
+                "services": _visit_services(visit)[0],
+                "service_ids": _visit_services(visit)[1],
             }
             for visit in visits
         ],
@@ -606,7 +589,7 @@ def get_today_checkins(db: Session = Depends(get_db), _=Depends(require_internal
         db.query(models.Visit)
         .options(
             joinedload(models.Visit.customer),
-            joinedload(models.Visit.visit_services).joinedload(models.VisitService.service),
+            *_VISIT_SERVICE_LOADS,
         )
         .filter(models.Visit.visit_date == today_local())
         .order_by(models.Visit.checked_in_at.asc())
@@ -622,7 +605,8 @@ def get_today_checkins(db: Session = Depends(get_db), _=Depends(require_internal
             "phone_number": visit.customer.phone_number,
             "phone_e164": normalize_us_phone(visit.customer.phone_number).e164,
             "checked_in_at": visit.checked_in_at,
-            "services": [item.service.name for item in visit.visit_services],
+            "services": _visit_services(visit)[0],
+            "service_ids": _visit_services(visit)[1],
             **_today_queue_discount(visit, visit.customer),
         }
         for index, visit in enumerate(visits, start=1)
@@ -635,7 +619,7 @@ def get_today_checkins(db: Session = Depends(get_db), _=Depends(require_internal
 def get_public_queue_status(db: Session = Depends(get_db)):
     visits = (
         db.query(models.Visit)
-        .options(joinedload(models.Visit.visit_services).joinedload(models.VisitService.service))
+        .options(*_VISIT_SERVICE_LOADS)
         .filter(models.Visit.visit_date == today_local())
         .order_by(models.Visit.checked_in_at.asc())
         .all()
@@ -645,7 +629,7 @@ def get_public_queue_status(db: Session = Depends(get_db)):
             "position": index,
             "display_name": f"Customer #{index}",
             "checked_in_at": visit.checked_in_at,
-            "services": [item.service.name for item in visit.visit_services],
+            "services": _visit_services(visit)[0],
         }
         for index, visit in enumerate(visits, start=1)
     ]}
@@ -662,7 +646,7 @@ def check_in_customer(
     if _get_visit_today(db, customer.id):
         raise _already_checked_in_error()
 
-    selected_services = _get_selected_services_or_404(db, payload.selected_service_ids)
+    selected_services = _get_selected_services_or_404(payload.selected_service_ids)
 
     new_visit = models.Visit(
         customer_id=customer.id,
@@ -677,7 +661,11 @@ def check_in_customer(
         raise _already_checked_in_error()
 
     for service in selected_services:
-        db.add(models.VisitService(visit_id=new_visit.id, service_id=service.id))
+        db.add(
+            models.VisitOwnerService(
+                visit_id=new_visit.id, owner_service_id=service.id, service_name=service.name
+            )
+        )
 
     customer.visit_count_cycle += 1
 
@@ -757,6 +745,7 @@ def check_in_customer(
         "birthday_discount_amount": customer.birthday_discount_amount,
         "discounts_applied": discounts_applied,
         "selected_services": [service.name for service in selected_services],
+        "selected_service_ids": [service.id for service in selected_services],
     }
 
 

@@ -113,8 +113,10 @@ class UpdateCustomerProfileRequest(BaseModel):
 # Services / check-in
 # ----------------------------
 class ServiceResponse(BaseModel):
-    id: int
+    id: int  # Owner BookingService id
     name: str
+    category: Optional[str] = None
+    duration_minutes: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -143,6 +145,7 @@ class CheckInResponse(BaseModel):
     birthday_discount_amount: int
     discounts_applied: list[dict] = []
     selected_services: list[str] = []
+    selected_service_ids: list[int] = []
 
 
 class TodayCheckInItem(BaseModel):
@@ -153,7 +156,8 @@ class TodayCheckInItem(BaseModel):
     phone_number: str
     phone_e164: str
     checked_in_at: datetime
-    services: list[str] = []
+    services: list[str] = []  # legacy display names, kept for older Owner code
+    service_ids: list[int] = []  # Owner BookingService ids (empty for legacy name-only visits)
     discount_type: Optional[str] = None
     discount_value: float = 0
     discount_label: Optional[str] = None
