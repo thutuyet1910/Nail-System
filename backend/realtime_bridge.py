@@ -40,8 +40,20 @@ _SAFE_TOKEN = re.compile(r"[^A-Za-z0-9_.\-]")
 _MARK_NAME = re.compile(r"^audio-(\d+)-(\d+)$")
 
 
+SESSION_INIT_TIMEOUT_SECONDS = 10.0
+MAX_INIT_EVENTS = 50
+
+
 class RealtimeFatalError(RuntimeError):
     """A provider error that must end the voice bridge. Carries no provider text."""
+
+
+class RealtimeInitError(RuntimeError):
+    """OpenAI never reached session.updated (error event or timeout). Carries no provider text."""
+
+    def __init__(self, stage: str, provider_type: str | None = None, provider_code: str | None = None):
+        super().__init__(stage)
+        self.stage, self.provider_type, self.provider_code = stage, provider_type, provider_code
 
 
 def _safe_token(value) -> str:
@@ -67,12 +79,13 @@ def _record_provider_error(state, event: dict, classification: str) -> None:
     if not db or not call:
         return
     error = event.get("error") if isinstance(event.get("error"), dict) else {}
+    state["last_provider_error"] = {"type": _safe_token(error.get("type")), "code": _safe_token(error.get("code"))}
     with suppress(Exception):
         voice_foundation.append_call_event(
             db, call=call, event_type="provider_error",
             result_status="failed" if classification != "recoverable" else "rejected",
-            metadata={"classification": classification, "error_type": _safe_token(error.get("type")),
-                      "error_code": _safe_token(error.get("code"))},
+            metadata={"provider": "openai", "classification": classification, "stage": state.get("stage", "media"),
+                      "error_type": _safe_token(error.get("type")), "error_code": _safe_token(error.get("code"))},
         )
 
 
@@ -313,38 +326,130 @@ async def _openai_to_twilio(websocket, openai, state, gateway):
         # Any other event type is intentionally ignored.
 
 
+def _is_connection_closed(exc) -> bool:
+    return hasattr(exc, "rcvd") and hasattr(exc, "sent")  # websockets ConnectionClosed*
+
+
+def _close_info(exc) -> dict:
+    received = getattr(exc, "rcvd", None)
+    frame = received or getattr(exc, "sent", None)
+    info = {}
+    if isinstance(getattr(frame, "code", None), int):
+        info["close_code"] = frame.code
+    reason = voice_foundation.safe_provider_text(getattr(frame, "reason", ""), 120)
+    if reason:
+        info["close_reason"] = reason
+    info["close_initiated_by"] = "provider" if received else "local_or_abnormal"
+    return info
+
+
+def _failure_metadata(state, exc) -> dict:
+    """Why the bridge failed, never what was said: no payloads, headers, audio or transcripts."""
+    meta = {"error_code": type(exc).__name__, "failure_stage": state.get("stage", "unknown"),
+            "session_ready": bool(state.get("session_ready"))}
+    if state.get("observed_by"):
+        meta["observed_by"] = state["observed_by"]
+    if isinstance(exc, RealtimeInitError):
+        meta.update(provider="openai", failure_stage=exc.stage,
+                    provider_error_type=exc.provider_type, provider_error_code=exc.provider_code)
+    elif isinstance(exc, RealtimeFatalError):
+        last = state.get("last_provider_error") or {}
+        meta.update(provider="openai", failure_stage="openai_provider_error",
+                    provider_error_type=last.get("type"), provider_error_code=last.get("code"))
+    elif _is_connection_closed(exc):
+        meta.update(provider="openai", failure_stage="openai_connection_closed", **_close_info(exc))
+    elif state.get("stage") == "openai_connect":
+        meta.update(provider="openai", failure_stage="openai_connect",
+                    http_status=getattr(getattr(exc, "response", None), "status_code", None))
+    elif state.get("stage") == "twilio_start":
+        meta["failure_stage"] = "twilio_start"
+    else:
+        meta["failure_stage"] = "bridge_runtime"
+    return {key: value for key, value in meta.items() if value is not None}
+
+
+async def _initialize_openai_session(openai, state, session_update: dict) -> None:
+    """session.created -> send session.update -> session.updated. Nothing else is read or sent
+    (no greeting, no caller audio) until OpenAI confirms the session is configured."""
+    async def handshake():
+        created = False
+        for _ in range(MAX_INIT_EVENTS):
+            event = await openai.receive_json()
+            kind = event.get("type")
+            if kind == "error":
+                classification = classify_realtime_error(event)
+                _record_provider_error(state, event, classification if classification != "recoverable" else "unknown")
+                error = event.get("error") if isinstance(event.get("error"), dict) else {}
+                raise RealtimeInitError("openai_session_init", _safe_token(error.get("type")), _safe_token(error.get("code")))
+            if kind == "session.created" and not created:
+                created = True
+                await openai.send_json(session_update)
+            elif kind == "session.updated" and created:
+                return
+        raise RealtimeInitError("openai_session_init")  # too many unrelated events: fail closed
+
+    try:
+        await asyncio.wait_for(handshake(), timeout=SESSION_INIT_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError as exc:
+        raise RealtimeInitError("openai_session_init_timeout") from exc
+
+
+async def _cancel_tasks(tasks) -> None:
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)  # awaited: no dangling pumps, errors consumed
+
+
 async def run_media_bridge(websocket: WebSocket, *, config, db_factory, gateway, openai_factory=OpenAIRealtimeSocket.connect):
     await websocket.accept()
     db = db_factory()
-    state = {"db": db, "db_factory": db_factory, "config": config, "stopped": False, "started": False}
+    state = {"db": db, "db_factory": db_factory, "config": config, "stopped": False, "started": False,
+             "stage": "twilio_start", "session_ready": False}
     openai = None
+    tasks = []
     try:
         config.require_media()
         await _authenticate_twilio_start(websocket, state)
+        state["stage"] = "openai_connect"
         openai = await openai_factory(config)
+        state["stage"] = "openai_session_init"
         settings = __import__("booking_service").get_salon_settings(db)
-        await openai.send_json(build_session_update(config, settings.salon_name, settings.timezone))
+        await _initialize_openai_session(openai, state, build_session_update(config, settings.salon_name, settings.timezone))
+        state.update({"session_ready": True, "stage": "media"})
         await openai.send_json({"type": "response.create", "response": {"instructions": f"Greet the caller now with one short sentence that clearly discloses you are the salon's AI receptionist, then ask how you can help, e.g. \"Hi, I'm the salon's AI receptionist. How can I help you today?\" Do this only once."}})
-        tasks = [asyncio.create_task(_twilio_to_openai(websocket, openai, state)), asyncio.create_task(_openai_to_twilio(websocket, openai, state, gateway))]
-        done, pending = await asyncio.wait(tasks, timeout=config.max_call_minutes * 60, return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
+        tasks = [
+            asyncio.create_task(_twilio_to_openai(websocket, openai, state), name="twilio_to_openai"),
+            asyncio.create_task(_openai_to_twilio(websocket, openai, state, gateway), name="openai_to_twilio"),
+        ]
+        done, _pending = await asyncio.wait(tasks, timeout=config.max_call_minutes * 60, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
-            task.result()
+            if task.cancelled() or task.exception() is None:
+                continue
+            exc = task.exception()
+            if state.get("stopped") and _is_connection_closed(exc):
+                continue  # the caller already hung up: the provider closing afterwards is not a failure
+            state["observed_by"] = task.get_name()
+            raise exc
     except (WebSocketDisconnect, asyncio.CancelledError):
         pass
     except Exception as exc:
-        logger.warning("Voice media bridge ended with %s", type(exc).__name__)
+        logger.warning("Voice media bridge failed at stage %s with %s", state.get("stage"), type(exc).__name__, exc_info=True)
         call = state.get("call")
         if call:
             with suppress(Exception):
                 db.rollback()
             voice_foundation.update_call_state(db, call.id, "failed", error_code=type(exc).__name__)
-            voice_foundation.append_call_event(db, call=call, event_type="failed", result_status="failed", metadata={"error_code": type(exc).__name__})
+            voice_foundation.append_call_event(
+                db, call=call, event_type="failed", result_status="failed",
+                operation_key=f"bridge-failed:{call.call_id}", metadata=_failure_metadata(state, exc),
+            )
             notification_service.create_notification(db, notification_type="failed_call", severity="warning", title="AI phone call failed", message="A phone call ended because the voice service encountered an error.", source_type="voice_call", source_id=call.call_id, event_key=f"failed-call:{call.call_id}")
-        with suppress(RuntimeError):
+        with suppress(Exception):
             await websocket.close(code=1008 if isinstance(exc, PermissionError) else 1011)
     finally:
+        await _cancel_tasks(tasks)
         call = state.get("call")
         if call:
             with suppress(Exception):

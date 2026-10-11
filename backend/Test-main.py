@@ -618,9 +618,11 @@ class TestReadOnlyVoiceIntegration:
             async def close(self, code): pass
 
         class FakeOpenAI:
-            def __init__(self): self.sent = []; self.closed = False
+            def __init__(self): self.sent = []; self.closed = False; self.handshake = [{"type": "session.created"}, {"type": "session.updated"}]
             async def send_json(self, value): self.sent.append(value)
-            async def receive_json(self): await asyncio.Event().wait()
+            async def receive_json(self):
+                if self.handshake: return self.handshake.pop(0)
+                await asyncio.Event().wait()
             async def close(self): self.closed = True
 
         ws, ai = FakeTwilio(), FakeOpenAI()
@@ -3243,7 +3245,7 @@ class TestToolFailuresMidCall:
             async def send_json(self, value): pass
             async def close(self, code): pass
 
-        ai = FakeOpenAIEvents([self.function_call()], fail_on="conversation.item.create")
+        ai = FakeOpenAIEvents([{"type": "session.created"}, {"type": "session.updated"}, self.function_call()], fail_on="conversation.item.create")
 
         async def connect(_config):
             return ai
@@ -3277,7 +3279,7 @@ class TestToolFailuresMidCall:
                     return self.events.pop(0)
                 await asyncio.Event().wait()
 
-        ai = OpenAI([self.function_call()])
+        ai = OpenAI([{"type": "session.created"}, {"type": "session.updated"}, self.function_call()])
 
         async def connect(_config):
             return ai
@@ -3786,3 +3788,305 @@ class TestCheckinServiceIdsFlow:
     def test_voice_allowlist_unchanged(self):
         assert {tool["name"] for tool in voice_tools.READ_ONLY_TOOL_DEFINITIONS} == {
             "get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback"}
+
+
+# ── Realtime session gate and failure observability ──────────────────────────
+
+import json as _json  # noqa: E402
+from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK  # noqa: E402
+from websockets.frames import Close  # noqa: E402
+
+
+def _bridge_start(internal, token, sid):
+    return [{"event": "connected", "protocol": "Call", "version": "1.0.0"},
+            {"event": "start", "start": {"accountSid": "AC11111111111111111111111111111111", "callSid": sid, "streamSid": "MZ-" + sid,
+                                         "mediaFormat": {"encoding": "audio/x-mulaw", "sampleRate": 8000, "channels": 1},
+                                         "customParameters": {"voice_call_id": internal, "stream_token": token}}}]
+
+
+class BridgeTwilio:
+    """Scripted Twilio side. `after_start` messages are returned one per read; then it idles."""
+    def __init__(self, internal, token, sid, after_start=(), on_stop_read=None):
+        self.messages = _bridge_start(internal, token, sid)
+        self.after_start = list(after_start)
+        self.reads_after_start = 0
+        self.closed_with = []
+        self.on_stop_read = on_stop_read
+
+    async def accept(self): pass
+
+    async def receive_json(self):
+        if self.messages:
+            return self.messages.pop(0)
+        self.reads_after_start += 1
+        if self.after_start:
+            message = self.after_start.pop(0)
+            if message.get("event") == "stop" and self.on_stop_read:
+                self.on_stop_read()
+            return message
+        await asyncio.Event().wait()
+
+    async def send_json(self, value): pass
+
+    async def close(self, code): self.closed_with.append(code)
+
+
+class BridgeOpenAI:
+    """Scripted OpenAI side: plays `script` (events, or exceptions to raise), then idles."""
+    def __init__(self, script):
+        self.script, self.sent, self.closed = list(script), [], False
+        self.on_receive = None
+
+    async def receive_json(self):
+        if self.on_receive:
+            self.on_receive()
+        if self.script:
+            item = self.script.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            if callable(item):
+                return await item()
+            return item
+        await asyncio.Event().wait()
+
+    async def send_json(self, value): self.sent.append(value)
+
+    async def close(self): self.closed = True
+
+
+READY = [{"type": "session.created"}, {"type": "session.updated"}]
+
+
+def _run_bridge(twilio, ai):
+    async def main():
+        async def connect(_config): return ai
+        await realtime_bridge.run_media_bridge(twilio, config=VoiceConfig.from_env(), db_factory=SessionLocal, gateway=object(), openai_factory=connect)
+        await asyncio.sleep(0)
+        return [t.get_name() for t in asyncio.all_tasks() if t.get_name() in ("twilio_to_openai", "openai_to_twilio") and not t.done()]
+    return asyncio.run(main())
+
+
+def _call_events(call_id, event_type=None):
+    db = SessionLocal()
+    try:
+        query = db.query(models.VoiceCallEvent).filter(models.VoiceCallEvent.call_id == call_id)
+        if event_type:
+            query = query.filter(models.VoiceCallEvent.event_type == event_type)
+        return query.all()
+    finally:
+        db.close()
+
+
+def _call_state(call_id):
+    db = SessionLocal()
+    try:
+        return db.get(models.VoiceCall, call_id).call_state
+    finally:
+        db.close()
+
+
+MEDIA = {"event": "media", "streamSid": "MZ-CA-h", "media": {"payload": base64.b64encode(b"\xff" * 160).decode()}}
+
+
+class TestRealtimeSessionGate:
+    def test_ready_handshake_then_greeting_then_media_in_order_and_normal_hangup_completes(self):
+        call_id, internal, token = _voice_call("CA-h1")
+        media = {**MEDIA, "streamSid": "MZ-CA-h1"}
+        twilio = BridgeTwilio(internal, token, "CA-h1", [media, {"event": "stop", "streamSid": "MZ-CA-h1", "stop": {"callSid": "CA-h1"}}])
+        ai = BridgeOpenAI(READY)
+        assert _run_bridge(twilio, ai) == []
+        assert [m["type"] for m in ai.sent] == ["session.update", "response.create", "input_audio_buffer.append"]
+        assert _call_state(call_id) == "completed" and ai.closed
+        assert _call_events(call_id, "failed") == [] and _call_events(call_id, "provider_error") == []
+
+    def test_caller_audio_is_not_read_or_forwarded_before_session_updated(self):
+        call_id, internal, token = _voice_call("CA-h2")
+        media = {**MEDIA, "streamSid": "MZ-CA-h2"}
+        twilio = BridgeTwilio(internal, token, "CA-h2", [media, {"event": "stop", "streamSid": "MZ-CA-h2", "stop": {"callSid": "CA-h2"}}])
+        seen = {}
+
+        async def updated():
+            seen["twilio_reads_when_updated"] = twilio.reads_after_start
+            seen["sent_when_updated"] = [m["type"] for m in ai.sent]
+            return {"type": "session.updated"}
+
+        ai = BridgeOpenAI([{"type": "session.created"}, updated])
+        _run_bridge(twilio, ai)
+        assert seen == {"twilio_reads_when_updated": 0, "sent_when_updated": ["session.update"]}
+        assert "response.create" not in seen["sent_when_updated"]
+
+    def test_openai_error_before_session_updated_fails_cleanly_with_safe_metadata(self):
+        call_id, internal, token = _voice_call("CA-h3")
+        error = {"type": "error", "error": {"type": "insufficient_quota", "code": "insufficient_quota",
+                                            "message": "You exceeded your quota. key sk-test1234567890 Bearer abc"}}
+        twilio = BridgeTwilio(internal, token, "CA-h3", [{**MEDIA, "streamSid": "MZ-CA-h3"}])
+        ai = BridgeOpenAI([{"type": "session.created"}, error])
+        assert _run_bridge(twilio, ai) == []
+        assert _call_state(call_id) == "failed"
+        assert [m["type"] for m in ai.sent] == ["session.update"]  # no greeting, no caller audio
+        assert twilio.closed_with == [1011] and ai.closed
+        (failed,) = _call_events(call_id, "failed")
+        assert failed.metadata_json["failure_stage"] == "openai_session_init" and failed.metadata_json["provider"] == "openai"
+        assert failed.metadata_json["provider_error_code"] == "insufficient_quota" and failed.metadata_json["session_ready"] is False
+        (provider,) = _call_events(call_id, "provider_error")
+        assert provider.metadata_json["stage"] == "openai_session_init" and provider.metadata_json["error_type"] == "insufficient_quota"
+        dumped = _json.dumps([failed.metadata_json, provider.metadata_json])
+        assert "sk-" not in dumped and "Bearer" not in dumped and "exceeded" not in dumped  # no provider free text
+
+    def test_session_updated_timeout_fails_cleanly(self, monkeypatch):
+        monkeypatch.setattr(realtime_bridge, "SESSION_INIT_TIMEOUT_SECONDS", 0.2)
+        call_id, internal, token = _voice_call("CA-h4")
+        twilio = BridgeTwilio(internal, token, "CA-h4", [{**MEDIA, "streamSid": "MZ-CA-h4"}])
+        ai = BridgeOpenAI([{"type": "session.created"}])  # never confirms
+        assert _run_bridge(twilio, ai) == []
+        assert _call_state(call_id) == "failed" and twilio.closed_with == [1011] and ai.closed
+        assert [m["type"] for m in ai.sent] == ["session.update"]
+        (failed,) = _call_events(call_id, "failed")
+        assert failed.metadata_json["failure_stage"] == "openai_session_init_timeout" and failed.metadata_json["error_code"] == "RealtimeInitError"
+
+    def test_openai_connect_failure_is_distinguished(self):
+        call_id, internal, token = _voice_call("CA-h5")
+        twilio = BridgeTwilio(internal, token, "CA-h5")
+
+        class Rejected(Exception):
+            response = type("R", (), {"status_code": 401})()
+
+        async def main():
+            async def connect(_config): raise Rejected("handshake rejected sk-secret123456")
+            await realtime_bridge.run_media_bridge(twilio, config=VoiceConfig.from_env(), db_factory=SessionLocal, gateway=object(), openai_factory=connect)
+        asyncio.run(main())
+        (failed,) = _call_events(call_id, "failed")
+        assert failed.metadata_json["failure_stage"] == "openai_connect" and failed.metadata_json["http_status"] == 401
+        assert "sk-" not in _json.dumps(failed.metadata_json)
+
+    def test_openai_connection_closed_keeps_close_code_reason_and_observer(self):
+        call_id, internal, token = _voice_call("CA-h6")
+        twilio = BridgeTwilio(internal, token, "CA-h6")
+        closed = ConnectionClosedError(Close(1011, "internal error sk-abcdef123456 at https://api.example/x"), None)
+        ai = BridgeOpenAI(READY + [closed])
+        assert _run_bridge(twilio, ai) == []
+        assert _call_state(call_id) == "failed"
+        (failed,) = _call_events(call_id, "failed")
+        meta = failed.metadata_json
+        assert meta["error_code"] == "ConnectionClosedError" and meta["failure_stage"] == "openai_connection_closed"
+        assert meta["close_code"] == 1011 and meta["close_initiated_by"] == "provider"
+        assert meta["observed_by"] == "openai_to_twilio" and meta["session_ready"] is True
+        assert "sk-" not in meta["close_reason"] and "https" not in meta["close_reason"] and "internal error" in meta["close_reason"]
+
+    def test_no_duplicate_failure_events_or_notifications_for_one_failure(self):
+        call_id, internal, token = _voice_call("CA-h7")
+        twilio = BridgeTwilio(internal, token, "CA-h7")
+        ai = BridgeOpenAI(READY + [{"type": "error", "error": {"type": "server_error", "code": "server_error"}}])
+        _run_bridge(twilio, ai)
+        assert len(_call_events(call_id, "failed")) == 1 and len(_call_events(call_id, "provider_error")) == 1
+        assert _call_events(call_id, "call_completed") == []
+        verify = SessionLocal()
+        assert verify.query(models.OwnerNotification).filter(models.OwnerNotification.notification_type == "failed_call").count() == 1
+        verify.close()
+        (failed,) = _call_events(call_id, "failed")
+        assert failed.metadata_json["failure_stage"] == "openai_provider_error" and failed.metadata_json["provider_error_code"] == "server_error"
+
+    def test_provider_closing_after_the_caller_hung_up_is_not_a_failure(self):
+        call_id, internal, token = _voice_call("CA-h8")
+        hungup = {}
+        twilio = BridgeTwilio(internal, token, "CA-h8", [{"event": "stop", "streamSid": "MZ-CA-h8", "stop": {"callSid": "CA-h8"}}],
+                              on_stop_read=lambda: hungup.setdefault("event", True))
+
+        async def closes_after_hangup():
+            while not hungup:
+                await asyncio.sleep(0)
+            raise ConnectionClosedOK(Close(1000, ""), None)
+
+        ai = BridgeOpenAI(READY + [closes_after_hangup])
+        _run_bridge(twilio, ai)
+        assert _call_state(call_id) == "completed"
+        assert _call_events(call_id, "failed") == [] and twilio.closed_with == []
+
+    def test_sibling_task_is_cancelled_and_awaited_when_one_side_ends(self):
+        call_id, internal, token = _voice_call("CA-h9")
+        twilio = BridgeTwilio(internal, token, "CA-h9", [{"event": "stop", "streamSid": "MZ-CA-h9", "stop": {"callSid": "CA-h9"}}])
+        ai = BridgeOpenAI(READY)  # the OpenAI pump idles forever until it is cancelled
+        assert _run_bridge(twilio, ai) == []  # no pump left dangling
+        assert _call_state(call_id) == "completed"
+
+    def test_no_secret_header_or_payload_is_persisted_on_failure(self):
+        call_id, internal, token = _voice_call("CA-h10")
+        twilio = BridgeTwilio(internal, token, "CA-h10")
+        error = {"type": "error", "error": {"type": "authentication_error", "code": "invalid_api_key", "message": "Incorrect API key sk-live-ABCDEFGH12345 Authorization: Bearer xyz"}}
+        _run_bridge(twilio, BridgeOpenAI([{"type": "session.created"}, error]))
+        db = SessionLocal()
+        blob = _json.dumps([e.metadata_json for e in db.query(models.VoiceCallEvent).filter(models.VoiceCallEvent.call_id == call_id)], default=str)
+        blob += str([(c.error_code, c.summary) for c in db.query(models.VoiceCall).all()])
+        blob += str([n.message + str(n.metadata_json) for n in db.query(models.OwnerNotification).all()])
+        db.close()
+        for forbidden in ("sk-", "Bearer", "Authorization", "test-openai-api-key", "test-twilio-auth-token", token, "ABCDEFGH"):
+            assert forbidden not in blob
+
+    def test_working_call_with_batched_tools_is_unchanged_after_the_gate(self):
+        call_id, internal, token = _voice_call("CA-h11")
+        calls = {"type": "response.done", "response": {"output": [
+            {"type": "function_call", "name": "get_salon_info", "arguments": "{}", "call_id": "a"},
+            {"type": "function_call", "name": "list_services", "arguments": "{}", "call_id": "b"}]}}
+        twilio = BridgeTwilio(internal, token, "CA-h11", [{"event": "stop", "streamSid": "MZ-CA-h11", "stop": {"callSid": "CA-h11"}}])
+
+        class SlowStop(BridgeTwilio):
+            async def receive_json(self):
+                if not self.messages:
+                    await asyncio.sleep(0.3)  # let the tool round-trip finish before the caller hangs up
+                return await super().receive_json()
+
+        twilio = SlowStop(internal, token, "CA-h11", [{"event": "stop", "streamSid": "MZ-CA-h11", "stop": {"callSid": "CA-h11"}}])
+        ai = BridgeOpenAI(READY + [calls])
+        _run_bridge(twilio, ai)
+        types = [m["type"] for m in ai.sent]
+        assert types[:2] == ["session.update", "response.create"]
+        assert types[2:] == ["conversation.item.create", "conversation.item.create", "response.create"]
+        assert _call_state(call_id) == "completed"
+
+    def test_voice_allowlist_and_service_lookup_unchanged(self):
+        assert {t["name"] for t in voice_tools.READ_ONLY_TOOL_DEFINITIONS} == {
+            "get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback"}
+        db = SessionLocal()
+        call = voice_foundation.create_call(db, caller_phone="6025551234", called_phone="6025559999", call_id="voice-gate")
+        facade = voice_foundation.VoiceBookingFacade(db, voice_foundation.VoiceAuthorizationContext(call.id, call.call_id, 0, call.caller_phone_e164, None))
+        assert {s["name"] for s in facade.list_services()} == {s["name"] for s in client.get("/services").json()}
+        db.close()
+
+
+class TestTwilioStreamErrorAndFallback:
+    FORM = {"AccountSid": "AC11111111111111111111111111111111", "From": "+16025551234", "To": "+16025559999", "CallSid": "CA-se1"}
+
+    def test_stream_error_text_is_captured_sanitized_and_tied_to_the_call(self):
+        _twilio_post("/voice/twilio/incoming", self.FORM)
+        form = {"AccountSid": self.FORM["AccountSid"], "CallSid": "CA-se1", "StreamEvent": "stream-error", "StreamSid": "MZse1",
+                "StreamError": "Failed to connect to wss://voice.test/voice/twilio/media with sk-leak123456 token", "SequenceNumber": "3"}
+        assert _twilio_post("/voice/twilio/status", form).status_code == 204
+        assert _twilio_post("/voice/twilio/status", form).status_code == 204  # replay: still one event
+        db = SessionLocal()
+        call = db.query(models.VoiceCall).filter(models.VoiceCall.provider_call_sid == "CA-se1").one()
+        events = db.query(models.VoiceCallEvent).filter(models.VoiceCallEvent.call_id == call.id, models.VoiceCallEvent.event_type == "failed").all()
+        assert call.call_state == "failed" and call.error_code == "twilio_stream_error" and len(events) == 1
+        meta = events[0].metadata_json
+        assert meta["provider_event"] == "stream-error" and "Failed to connect" in meta["stream_error"]
+        assert "wss://" not in meta["stream_error"] and "sk-" not in meta["stream_error"] and "Signature" not in str(meta)
+        db.close()
+
+    def test_stream_error_without_text_still_recorded_and_other_stream_events_unchanged(self):
+        _twilio_post("/voice/twilio/incoming", {**self.FORM, "CallSid": "CA-se2"})
+        base = {"AccountSid": self.FORM["AccountSid"], "CallSid": "CA-se2", "StreamSid": "MZse2"}
+        assert _twilio_post("/voice/twilio/status", {**base, "StreamEvent": "stream-started"}).status_code == 204
+        assert _twilio_post("/voice/twilio/status", {**base, "StreamEvent": "stream-error"}).status_code == 204
+        db = SessionLocal()
+        call = db.query(models.VoiceCall).filter(models.VoiceCall.provider_call_sid == "CA-se2").one()
+        by_type = {e.event_type: e.metadata_json for e in db.query(models.VoiceCallEvent).filter(models.VoiceCallEvent.call_id == call.id)}
+        assert by_type["stream_started"] == {"provider_event": "stream-started"}
+        assert by_type["failed"]["provider_event"] == "stream-error" and by_type["failed"].get("stream_error") is None
+        db.close()
+
+    def test_twiml_adds_a_generic_spoken_fallback_that_never_names_the_provider(self):
+        response = _twilio_post("/voice/twilio/incoming", {**self.FORM, "CallSid": "CA-se3"})
+        text = response.text
+        assert text.index("</Connect>") < text.index("<Say>") and "<Stream" in text
+        lowered = text.lower()
+        for word in ("openai", "quota", "error", "provider"):
+            assert word not in lowered

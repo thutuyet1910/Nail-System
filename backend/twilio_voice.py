@@ -50,6 +50,9 @@ def build_stream_twiml(config: VoiceConfig, call, stream_token: str) -> str:
     stream.parameter(name="stream_token", value=stream_token)
     connect.append(stream)
     response.append(connect)
+    # Runs only if the media WebSocket closes while the caller is still on the line (bridge failure or
+    # max duration). Deliberately generic: it never says why.
+    response.say("We're sorry, we can't continue this call right now. Please try again later. Goodbye.")
     return str(response)
 
 
@@ -83,7 +86,10 @@ def apply_status(db, form: dict):
             db, call=call, event_type=event_type,
             result_status="failed" if stream_event == "stream-error" else "success",
             operation_key=f"twilio-stream:{stream_event}:{stream_sid}",
-            metadata={"provider_event": stream_event},
+            metadata=(
+                {"provider_event": stream_event, "stream_error": voice_foundation.safe_provider_text(form.get("StreamError"), 200) or None}
+                if stream_event == "stream-error" else {"provider_event": stream_event}
+            ),
         )
     provider_status = form.get("CallStatus")
     target = TWILIO_STATUS_TO_STATE.get(provider_status)

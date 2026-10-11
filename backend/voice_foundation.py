@@ -1,4 +1,5 @@
 import hashlib
+import re
 import secrets
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -26,6 +27,18 @@ _SECRET_FRAGMENTS = ("secret", "token", "password", "authorization", "api_key")
 
 class VoiceFoundationError(ValueError):
     pass
+
+
+_URL_LIKE = re.compile(r"\S+://\S+")
+_SECRET_LIKE = re.compile(r"(?i)(bearer\s+\S+|\bsk-[A-Za-z0-9_\-]{6,}|\b[A-Za-z0-9_\-]{32,}\b)")
+
+
+def safe_provider_text(value, limit: int = 160) -> str:
+    """Provider-supplied free text -> short, single-line, printable text with URLs and key-like
+    tokens removed. Used for close reasons and error messages; never for payloads."""
+    text = " ".join(str(value or "").split())
+    text = _SECRET_LIKE.sub("[redacted]", _URL_LIKE.sub("[url]", text))
+    return "".join(ch for ch in text if ch.isprintable())[:limit]
 
 
 def _safe_metadata(metadata: dict | None) -> dict | None:
