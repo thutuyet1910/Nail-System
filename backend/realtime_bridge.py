@@ -279,6 +279,7 @@ async def _openai_to_twilio(websocket, openai, state, gateway):
         elif kind == "input_audio_buffer.speech_started" and state.get("stream_sid"):
             await _handle_barge_in(websocket, openai, state)
         elif kind == "response.done":
+            outputs_posted = False
             for item in (event.get("response") or {}).get("output", []):
                 if item.get("type") != "function_call":
                     continue
@@ -302,6 +303,10 @@ async def _openai_to_twilio(websocket, openai, state, gateway):
                             metadata={"tool": item.get("name", "unknown"), "error_code": type(exc).__name__},
                         )
                 await openai.send_json({"type": "conversation.item.create", "item": {"type": "function_call_output", "call_id": item.get("call_id"), "output": output}})
+                outputs_posted = True
+            if outputs_posted:
+                # One response for the whole batch: a response.create after each output would be
+                # rejected (conversation_already_has_active_response) once the first one is active.
                 await openai.send_json({"type": "response.create"})
         elif kind == "error":
             handle_realtime_error(state, event)

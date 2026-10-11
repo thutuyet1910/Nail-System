@@ -3299,3 +3299,43 @@ class TestToolFailuresMidCall:
         assert output["ok"] is False and ai.sent[1] == {"type": "response.create"}
         assert db.query(models.Appointment).count() == 0
         db.close()
+
+
+class TestToolOutputBatching:
+    """One model response with N tool calls -> N outputs, then exactly one response.create."""
+
+    def calls(self, n):
+        return {"type": "response.done", "response": {"output": [
+            {"type": "function_call", "name": "get_service_details", "arguments": "{}", "call_id": f"fc-{i}"} for i in range(1, n + 1)]}}
+
+    def run(self, monkeypatch, events):
+        monkeypatch.setattr(realtime_bridge, "_execute_tool_with_own_session", lambda state, gateway, item: {"call": item["call_id"]})
+        _, ai = _run_openai({"stopped": False, "config": VoiceConfig.from_env()}, events)
+        return [m["item"]["call_id"] if m["type"] == "conversation.item.create" else m["type"] for m in ai.sent]
+
+    def test_one_tool_call_sends_one_output_then_one_response_create(self, monkeypatch):
+        assert self.run(monkeypatch, [self.calls(1)]) == ["fc-1", "response.create"]
+
+    def test_two_tool_calls_send_both_outputs_before_a_single_response_create(self, monkeypatch):
+        assert self.run(monkeypatch, [self.calls(2)]) == ["fc-1", "fc-2", "response.create"]
+
+    def test_three_tool_calls_send_all_outputs_before_a_single_response_create(self, monkeypatch):
+        assert self.run(monkeypatch, [self.calls(3)]) == ["fc-1", "fc-2", "fc-3", "response.create"]
+
+    def test_separate_responses_each_get_their_own_response_create(self, monkeypatch):
+        assert self.run(monkeypatch, [self.calls(2), self.calls(1)]) == ["fc-1", "fc-2", "response.create", "fc-1", "response.create"]
+
+    def test_responses_without_tool_calls_never_send_response_create(self, monkeypatch):
+        text = {"type": "response.done", "response": {"output": [{"type": "message"}]}}
+        assert self.run(monkeypatch, [text, {"type": "response.done", "response": {"output": []}}]) == []
+
+    def test_a_failing_tool_still_gets_an_output_and_the_batch_one_response_create(self, monkeypatch):
+        def flaky(state, gateway, item):
+            if item["call_id"] == "fc-1":
+                raise RuntimeError("boom")
+            return {"ok": True}
+        monkeypatch.setattr(realtime_bridge, "_execute_tool_with_own_session", flaky)
+        state = {"stopped": False, "config": VoiceConfig.from_env(), "db": type("D", (), {"rollback": lambda self: None})(), "call": None}
+        _, ai = _run_openai(state, [self.calls(2)])
+        assert [m["type"] for m in ai.sent] == ["conversation.item.create", "conversation.item.create", "response.create"]
+        assert "temporarily unavailable" in ai.sent[0]["item"]["output"]
