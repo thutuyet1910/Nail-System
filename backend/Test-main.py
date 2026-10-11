@@ -434,7 +434,12 @@ class TestReadOnlyVoiceIntegration:
         assert session["model"] == "gpt-realtime-2.1"
         assert session["audio"]["input"]["format"] == {"type": "audio/pcmu"}
         assert session["audio"]["output"]["format"] == {"type": "audio/pcmu"}
-        assert "AI phone assistant" in session["instructions"]
+        assert "AI phone receptionist" in session["instructions"]
+        instructions = session["instructions"]
+        assert "never repeat it" in instructions and "asks whether they are talking to a human or an AI" in instructions
+        assert "Do not end ordinary answers" in instructions
+        for trigger in ("asks for the owner or a human", "asks for a callback", "booking, rescheduling, cancelling", "genuine error"):
+            assert trigger in instructions
         names = {tool["name"] for tool in session["tools"]}
         assert names == {"get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback"}
         assert not names.intersection({"create_booking", "reschedule_booking", "cancel_booking", "update_customer"})
