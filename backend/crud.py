@@ -548,8 +548,32 @@ def _specialty_matches(service_name: str, specialties: str | None) -> bool:
     return bool(required) and any(part in required for part in specialty_parts)
 
 
-def _technician_matches_service(db: Session, technician: models.Technician, service_name: str) -> bool:
+def _resolve_requested_services(db: Session, payload) -> list[int] | None:
+    """ID-first: valid service_ids win and are never re-mapped by name; an unknown or inactive id
+    is rejected. With no ids the caller keeps the legacy service_name matching."""
+    requested = list(getattr(payload, "service_ids", None) or [])
+    if not requested:
+        return None
+    ordered = list(dict.fromkeys(requested))
+    rows = {
+        row.id: row
+        for row in db.query(models.BookingService)
+        .filter(models.BookingService.id.in_(ordered), models.BookingService.is_active.is_(True))
+        .all()
+    }
+    if len(rows) != len(ordered):
+        raise BusinessRuleError("Unknown or inactive service id")
+    payload.service_name = ", ".join(rows[service_id].name for service_id in ordered)  # canonical text
+    return ordered
+
+
+def _technician_matches_service(
+    db: Session, technician: models.Technician, service_name: str, service_ids: list[int] | None = None
+) -> bool:
     """Prefer Phase-1 service eligibility when every selected check-in service maps exactly."""
+    if service_ids:
+        eligible = {item.service_id for item in technician.service_eligibilities}
+        return all(service_id in eligible for service_id in service_ids)
     requested_names = _split_csv(service_name)
     if requested_names:
         services = db.query(models.BookingService).filter(models.BookingService.is_active.is_(True)).all()
@@ -745,7 +769,9 @@ def _today_turn_stats(
     return {tech_id: (count, last or datetime.min) for tech_id, count, last in rows}
 
 
-def _choose_best_technician(db: Session, service_name: str, exclude_turn_id: int | None = None):
+def _choose_best_technician(
+    db: Session, service_name: str, exclude_turn_id: int | None = None, service_ids: list[int] | None = None
+):
     """Fair auto-assign.
 
     1. Active?             (is_active)
@@ -768,7 +794,7 @@ def _choose_best_technician(db: Session, service_name: str, exclude_turn_id: int
     candidates = [
         tech
         for tech in technicians
-        if _technician_matches_service(db, tech, service_name)
+        if _technician_matches_service(db, tech, service_name, service_ids)
         and _is_technician_free_today(db, tech.id, exclude_turn_id)
     ]
     if not candidates:
@@ -863,6 +889,7 @@ def create_turn(db: Session, turn: schemas.TurnCreate):
 
 
 def assign_next_turn(db: Session, payload: schemas.AssignTurnRequest):
+    _resolve_requested_services(db, payload)  # validates ids / canonical name; the technician is explicit here
     return create_turn(
         db,
         schemas.TurnCreate(
@@ -890,6 +917,7 @@ def assign_turn_auto(db: Session, payload: schemas.AutoAssignTurnRequest):
         existing_by_visit = db.query(models.Turn).filter(models.Turn.checkin_visit_id == payload.checkin_visit_id).first()
         if existing_by_visit:
             return existing_by_visit
+    service_ids = _resolve_requested_services(db, payload)
     existing_turn = _get_active_turn_for_customer(db, payload.customer_name, payload.customer_phone)
 
     if existing_turn:
@@ -897,12 +925,12 @@ def assign_turn_auto(db: Session, payload: schemas.AutoAssignTurnRequest):
         if existing_turn.status != "waiting":
             return existing_turn
 
-        technician = _choose_best_technician(db, payload.service_name, exclude_turn_id=existing_turn.id)
+        technician = _choose_best_technician(db, payload.service_name, exclude_turn_id=existing_turn.id, service_ids=service_ids)
         if not technician:
             raise BusinessRuleError("No available technician found for auto assignment")
         return _assign_existing_turn(db, existing_turn, technician, payload, assigned_by="system")
 
-    technician = _choose_best_technician(db, payload.service_name)
+    technician = _choose_best_technician(db, payload.service_name, service_ids=service_ids)
     if not technician:
         raise BusinessRuleError("No available technician found for auto assignment")
 
@@ -933,6 +961,7 @@ def assign_turn_preferred(db: Session, payload: schemas.AssignPreferredTurnReque
         existing_by_visit = db.query(models.Turn).filter(models.Turn.checkin_visit_id == payload.checkin_visit_id).first()
         if existing_by_visit:
             return existing_by_visit
+    service_ids = _resolve_requested_services(db, payload)
     existing_turn = _get_active_turn_for_customer(db, payload.customer_name, payload.customer_phone)
     if existing_turn:
         existing_turn = _move_turn_to_today(db, existing_turn)
@@ -944,7 +973,7 @@ def assign_turn_preferred(db: Session, payload: schemas.AssignPreferredTurnReque
         raise BusinessRuleError("Preferred technician not found")
     if not _is_bookable(technician):
         raise BusinessRuleError("Preferred technician is not available today")
-    if not _technician_matches_service(db, technician, payload.service_name):
+    if not _technician_matches_service(db, technician, payload.service_name, service_ids):
         raise BusinessRuleError("Preferred technician does not match the selected service")
     if not _is_technician_free_today(db, technician.id, existing_turn.id if existing_turn else None):
         raise BusinessRuleError("This technician is already assigned to another customer")

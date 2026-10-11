@@ -3491,3 +3491,129 @@ class TestOwnerServiceCatalog:
     def test_voice_allowlist_still_has_no_catalog_or_write_tools(self):
         names = {tool["name"] for tool in voice_tools.READ_ONLY_TOOL_DEFINITIONS}
         assert names == {"get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback"}
+
+
+# ── Internal service catalog contract for Check-In ────────────────────────────
+
+INTERNAL_HEADERS = {"X-Internal-Service-Token": "test-internal-token"}
+
+
+def _internal_client():
+    return TestClient(app)  # no owner session: only the service token
+
+
+class TestInternalServiceCatalog:
+    def test_internal_endpoint_requires_the_service_token(self):
+        anonymous = _internal_client()
+        assert anonymous.get("/internal/services").status_code == 401
+        assert anonymous.get("/internal/services", headers={"X-Internal-Service-Token": "wrong"}).status_code == 401
+        assert anonymous.get("/internal/services", headers={"X-Internal-Service-Token": ""}).status_code == 401
+        # an owner session alone is not the service credential
+        assert client.get("/internal/services").status_code == 401
+        assert anonymous.get("/internal/services", headers=INTERNAL_HEADERS).status_code == 200
+
+    def test_internal_endpoint_fails_closed_when_no_token_is_configured(self, monkeypatch):
+        monkeypatch.delenv("CHECKIN_INTERNAL_SERVICE_TOKEN", raising=False)
+        assert _internal_client().get("/internal/services", headers=INTERNAL_HEADERS).status_code == 503
+        assert _internal_client().get("/internal/services", headers={"X-Internal-Service-Token": ""}).status_code == 503
+
+    def test_active_services_with_stable_ids_and_only_safe_fields(self):
+        rows = _internal_client().get("/internal/services", headers=INTERNAL_HEADERS).json()
+        assert rows and all(set(row) == {"id", "name", "category", "duration_minutes", "is_active"} for row in rows)
+        assert all(row["is_active"] for row in rows)
+        assert {row["name"]: row["id"] for row in rows} == {name: item["id"] for name, item in _catalog().items()}
+        assert [row["id"] for row in rows] == sorted(row["id"] for row in rows)
+
+    def test_inactive_services_are_omitted_unless_requested_and_ids_survive_rename(self):
+        service_id = _catalog()["Gel Manicure"]["id"]
+        client.patch(f"/booking-services/{service_id}", json={"is_active": False})
+        internal = _internal_client()
+        assert service_id not in {r["id"] for r in internal.get("/internal/services", headers=INTERNAL_HEADERS).json()}
+        everything = internal.get("/internal/services?include_inactive=true", headers=INTERNAL_HEADERS).json()
+        assert next(r for r in everything if r["id"] == service_id)["is_active"] is False
+        client.patch(f"/booking-services/{service_id}", json={"is_active": True, "name": "Gel Mani Renamed"})
+        renamed = {r["id"]: r["name"] for r in internal.get("/internal/services", headers=INTERNAL_HEADERS).json()}
+        assert renamed[service_id] == "Gel Mani Renamed"
+
+    def test_internal_endpoint_is_read_only(self):
+        before = _catalog()
+        internal = _internal_client()
+        for method in ("post", "put", "patch", "delete"):
+            response = getattr(internal, method)("/internal/services", headers=INTERNAL_HEADERS)
+            assert response.status_code in (401, 403, 405), method  # token never substitutes for owner auth
+        service_id = before["Gel Manicure"]["id"]
+        assert internal.patch(f"/booking-services/{service_id}", json={"is_active": False}, headers=INTERNAL_HEADERS).status_code == 401
+        assert internal.post("/booking-services", json={"name": "Sneaky", "duration_minutes": 30}, headers=INTERNAL_HEADERS).status_code == 401
+        assert _catalog() == before
+
+    def test_voice_allowlist_and_public_services_unchanged(self):
+        names = {tool["name"] for tool in voice_tools.READ_ONLY_TOOL_DEFINITIONS}
+        assert names == {"get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback"}
+        public = client.get("/services").json()
+        assert {"id", "name", "price", "duration_minutes", "is_active"} <= set(public[0])
+
+
+class TestIdFirstCheckinServiceResolution:
+    def _eligible_tech(self, name, service_id):
+        tech_id = make_tech(name, specialties="waxing").json()["id"]
+        assert client.put(f"/booking-services/{service_id}/technicians", json={"technician_ids": [tech_id]}).status_code == 200
+        return tech_id
+
+    def test_service_ids_are_preferred_over_unrelated_service_name_text(self):
+        service_id = _catalog()["Gel Manicure"]["id"]
+        wanted = self._eligible_tech("Id First Tech", service_id)
+        make_tech("Name Only Tech", specialties="manicure / pedicure, gel")
+        response = auto_assign("Ida", "totally unrelated text", service_ids=[service_id])
+        assert response.status_code == 200, response.text
+        turn = response.json()
+        assert turn["technician_id"] == wanted
+        assert turn["service_name"] == "Gel Manicure"  # canonical Owner name, not the caller's text
+
+    def test_unknown_or_inactive_id_fails_safely_without_name_fallback(self):
+        make_tech("Fallback Tech", specialties="acrylic, gel, manicure / pedicure")
+        before = len(client.get("/turns").json())
+        unknown = auto_assign("Ulla", "Acrylic Full Set", service_ids=[999999])
+        assert unknown.status_code == 400 and "Unknown or inactive service id" in unknown.json()["detail"]
+        mixed = auto_assign("Ulla", "Acrylic Full Set", service_ids=[_catalog()["Acrylic Full Set"]["id"], 999999])
+        assert mixed.status_code == 400
+        inactive_id = _catalog()["Gel Manicure"]["id"]
+        client.patch(f"/booking-services/{inactive_id}", json={"is_active": False})
+        assert auto_assign("Ulla", "Gel Manicure", service_ids=[inactive_id]).status_code == 400
+        preferred = client.post("/turns/assign-preferred", json={"customer_name": "Ulla", "service_name": "Acrylic Full Set", "service_ids": [999999], "preferred_technician_id": 1})
+        assert preferred.status_code == 400
+        assert len(client.get("/turns").json()) == before
+
+    def test_renaming_a_service_does_not_break_id_resolution(self):
+        service_id = _catalog()["Gel Manicure"]["id"]
+        tech_id = self._eligible_tech("Rename Tech", service_id)
+        client.patch(f"/booking-services/{service_id}", json={"name": "Renamed Gel"})
+        turn = auto_assign("Rena", "Gel Manicure", service_ids=[service_id]).json()
+        assert turn["technician_id"] == tech_id and turn["service_name"] == "Renamed Gel"
+
+    def test_preferred_assignment_checks_id_eligibility(self):
+        service_id = _catalog()["Gel Manicure"]["id"]
+        other = make_tech("Pref Other", specialties="manicure / pedicure, gel").json()["id"]
+        eligible = self._eligible_tech("Pref Eligible", service_id)  # the PUT then makes only this technician eligible
+        ok = client.post("/turns/assign-preferred", json={"customer_name": "Pia", "service_name": "x", "service_ids": [service_id], "preferred_technician_id": eligible})
+        assert ok.status_code == 200 and ok.json()["technician_id"] == eligible
+        refused = client.post("/turns/assign-preferred", json={"customer_name": "Pam", "service_name": "x", "service_ids": [service_id], "preferred_technician_id": other})
+        assert refused.status_code == 400  # not eligible for that id, whatever the name text says
+
+    def test_legacy_service_name_payloads_still_work(self):
+        tech_id = make_tech("Legacy Tech", specialties="acrylic").json()["id"]
+        response = auto_assign("Lea", "Acrylic Full Set")
+        assert response.status_code == 200 and response.json()["technician_id"] == tech_id
+        assert response.json()["service_name"] == "Acrylic Full Set"
+        assert auto_assign("Lou", "Acrylic Full Set", service_ids=[]).status_code in (200, 400)  # empty ids = legacy path
+
+    def test_appointments_prefer_ids_and_never_name_map_an_unknown_id(self):
+        day = _booking_day()
+        _set_business_hours(day, time(9, 0), time(18, 0))
+        service_id = _catalog()["Gel Manicure"]["id"]
+        tech_id = make_tech("Appt Tech", specialties="manicure / pedicure, gel").json()["id"]
+        start = datetime.combine(day, time(10, 0))
+        ok = client.post("/appointments", json=_booking_payload(tech_id, start, [service_id], service_name="Acrylic Full Set"))
+        assert ok.status_code == 200, ok.text
+        assert [s["service_name_snapshot"] for s in ok.json()["appointment_services"]] == ["Gel Manicure"]
+        bad = client.post("/appointments", json=_booking_payload(tech_id, datetime.combine(day, time(13, 0)), [999999], service_name="Gel Manicure"))
+        assert bad.status_code == 400

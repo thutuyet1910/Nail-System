@@ -100,12 +100,19 @@ app.add_middleware(
 
 PUBLIC_OWNER_READS = {"/", "/salon", "/business-hours", "/services", "/availability"}
 PUBLIC_TWILIO_HTTP = {"/voice/twilio/incoming", "/voice/twilio/status"}
+INTERNAL_SERVICE_READS = {"/internal/services"}  # GET only, X-Internal-Service-Token instead of an owner session
 
 
 @app.middleware("http")
 async def owner_authorization_boundary(request: Request, call_next):
     path = request.url.path.rstrip("/") or "/"
     if request.method == "OPTIONS" or path.startswith("/auth/") or path in PUBLIC_TWILIO_HTTP or (request.method == "GET" and path in PUBLIC_OWNER_READS):
+        return await call_next(request)
+    if request.method == "GET" and path in INTERNAL_SERVICE_READS:
+        try:
+            auth_service.verify_internal_service_token(request)
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         return await call_next(request)
     db = SessionLocal()
     try:
@@ -325,6 +332,12 @@ def get_business_hours(db: Session = Depends(get_db)):
 @app.get("/services", response_model=list[schemas.BookingServiceOut])
 def get_booking_services(db: Session = Depends(get_db)):
     return booking_service.get_active_services(db)
+
+
+@app.get("/internal/services", response_model=list[schemas.InternalServiceOut])
+def get_internal_services(include_inactive: bool = False, db: Session = Depends(get_db)):
+    """Read-only catalog for the Check-In backend (service token, no owner session, no writes)."""
+    return service_catalog.list_internal(db, include_inactive)
 
 
 # Owner-only service catalog (not in PUBLIC_OWNER_READS: session required, CSRF on writes).

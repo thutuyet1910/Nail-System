@@ -307,6 +307,8 @@ class _TurnRequestBase(BaseModel):
     customer_name: str
     customer_phone: OptionalCustomerPhone = None
     service_name: str
+    # Preferred over service_name when present: stable booking_services ids from GET /internal/services.
+    service_ids: Optional[list[int]] = Field(default=None, max_length=20)
     preferred_technician_id: Optional[int] = None
     notes: Optional[str] = None
     discount_type: Optional[str] = None
@@ -668,6 +670,17 @@ class BookingServiceTechniciansUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     technician_ids: list[int] = Field(max_length=200)
+
+
+class InternalServiceOut(BaseModel):
+    """Check-In's read-only view of the catalog: stable id first, nothing admin-only."""
+    id: int
+    name: str
+    category: Optional[str] = None
+    duration_minutes: int
+    is_active: bool
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class BookingServiceAdminOut(BookingServiceOut):

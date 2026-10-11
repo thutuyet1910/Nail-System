@@ -41,6 +41,13 @@ def list_services(db: Session) -> list[dict]:
     return [serialize(row) for row in rows]
 
 
+def list_internal(db: Session, include_inactive: bool = False) -> list[models.BookingService]:
+    query = db.query(models.BookingService)
+    if not include_inactive:
+        query = query.filter(models.BookingService.is_active.is_(True))
+    return query.order_by(models.BookingService.id).all()
+
+
 def _get(db: Session, service_id: int) -> models.BookingService:
     service = db.get(models.BookingService, service_id)
     if not service:

@@ -59,6 +59,16 @@ def ensure_owner_credential(db: Session) -> None:
     db.commit()
 
 
+def verify_internal_service_token(request: Request) -> None:
+    """Service-to-service read access (Check-In -> Owner). Fails closed when no token is configured."""
+    expected = os.getenv("CHECKIN_INTERNAL_SERVICE_TOKEN", "")
+    if not expected:
+        raise HTTPException(status_code=503, detail="Internal service access is not configured")
+    supplied = request.headers.get("X-Internal-Service-Token", "")
+    if not supplied or not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Invalid internal service token")
+
+
 def _check_login_rate_limit(client_key: str) -> None:
     now = utc_now_naive()
     cutoff = now - timedelta(minutes=5)
