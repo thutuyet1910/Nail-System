@@ -28,6 +28,7 @@ function showView(view) {
         customerList: [customerListView, navCustomerList],
         technician: [technicianView, navTechnician],
         appointment: [appointmentView, navAppointment],
+        services: [servicesView, navServices],
         inventory: [inventoryView, navInventory],
         checkout: [checkoutView, navCheckout],
         techIncome: [techIncomeView, navTechIncome],

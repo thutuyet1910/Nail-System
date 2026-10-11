@@ -3339,3 +3339,155 @@ class TestToolOutputBatching:
         _, ai = _run_openai(state, [self.calls(2)])
         assert [m["type"] for m in ai.sent] == ["conversation.item.create", "conversation.item.create", "response.create"]
         assert "temporarily unavailable" in ai.sent[0]["item"]["output"]
+
+
+# ── Owner service catalog ─────────────────────────────────────────────────────
+
+def _catalog():
+    return {item["name"]: item for item in client.get("/booking-services").json()}
+
+
+def _new_service(**overrides):
+    payload = {"name": "Test Service", "category": "Test", "duration_minutes": 45, **overrides}
+    return client.post("/booking-services", json=payload)
+
+
+class TestOwnerServiceCatalog:
+    def test_seeded_services_are_listed_including_inactive(self):
+        assert "Gel Manicure" in _catalog()
+        service_id = _catalog()["Gel Manicure"]["id"]
+        client.patch(f"/booking-services/{service_id}", json={"is_active": False})
+        assert _catalog()["Gel Manicure"]["is_active"] is False
+        assert "Gel Manicure" not in {s["name"] for s in client.get("/services").json()}
+
+    def test_create_service_and_duplicate_name_rejected_case_insensitively(self):
+        created = _new_service(price=25, buffer_before_minutes=5, buffer_after_minutes=10)
+        assert created.status_code == 201
+        body = created.json()
+        assert body["name"] == "Test Service" and body["price"] == 25.0 and body["is_active"] is True
+        assert (body["buffer_before_minutes"], body["buffer_after_minutes"]) == (5, 10)
+        assert _new_service(name="  test SERVICE ").status_code == 409
+        service_id = _catalog()["Gel Manicure"]["id"]
+        assert client.patch(f"/booking-services/{service_id}", json={"name": "test service"}).status_code == 409
+        assert client.patch(f"/booking-services/{service_id}", json={"name": "Gel Manicure"}).status_code == 200
+
+    def test_update_duration_price_buffers_and_null_price(self):
+        service_id = _catalog()["Gel Manicure"]["id"]
+        updated = client.patch(f"/booking-services/{service_id}", json={"duration_minutes": 75, "price": 38.5, "buffer_before_minutes": 5, "buffer_after_minutes": 10}).json()
+        assert (updated["duration_minutes"], updated["price"], updated["buffer_before_minutes"], updated["buffer_after_minutes"]) == (75, 38.5, 5, 10)
+        assert _catalog()["Gel Manicure"]["duration_minutes"] == 75
+        # a patch that does not mention price leaves it alone; explicit null clears it
+        assert client.patch(f"/booking-services/{service_id}", json={"duration_minutes": 80}).json()["price"] == 38.5
+        assert client.patch(f"/booking-services/{service_id}", json={"price": None}).json()["price"] is None
+
+    def test_invalid_values_are_rejected_and_nothing_changes(self):
+        service_id = _catalog()["Gel Manicure"]["id"]
+        before = _catalog()["Gel Manicure"]
+        for bad in ({"duration_minutes": 0}, {"duration_minutes": -5}, {"duration_minutes": 100000}, {"buffer_before_minutes": -1},
+                    {"buffer_after_minutes": -1}, {"price": -1}, {"price": 1000000}, {"name": "   "}, {"name": None},
+                    {"is_active": None}, {"duration_minutes": None}, {"unknown_field": 1}):
+            assert client.patch(f"/booking-services/{service_id}", json=bad).status_code in (400, 422), bad
+        assert _new_service(duration_minutes=-10).status_code == 422
+        assert _new_service(name="").status_code == 422
+        assert _new_service(buffer_after_minutes=-1).status_code == 422
+        assert _catalog()["Gel Manicure"] == before
+        assert client.patch("/booking-services/999999", json={"duration_minutes": 30}).status_code == 404
+
+    def test_technician_eligibility_update_affects_availability(self):
+        day = _booking_day()
+        _set_business_hours(day, time(9, 0), time(11, 0))
+        service = _new_service(name="Eligibility Service", duration_minutes=60).json()
+        tech = make_tech("Elig Tech", specialties="waxing").json()["id"]
+        assert client.get(f"/availability?date={day.isoformat()}&service_ids={service['id']}").json() == []
+        updated = client.put(f"/booking-services/{service['id']}/technicians", json={"technician_ids": [tech]})
+        assert updated.status_code == 200 and updated.json()["eligible_technician_ids"] == [tech]
+        slots = client.get(f"/availability?date={day.isoformat()}&service_ids={service['id']}").json()
+        assert slots and all(slot["eligible_technician_ids"] == [tech] for slot in slots)
+        assert client.put(f"/booking-services/{service['id']}/technicians", json={"technician_ids": []}).json()["eligible_technician_ids"] == []
+        assert client.get(f"/availability?date={day.isoformat()}&service_ids={service['id']}").json() == []
+        assert client.put(f"/booking-services/{service['id']}/technicians", json={"technician_ids": [tech, 999999]}).status_code == 400
+        assert client.put("/booking-services/999999/technicians", json={"technician_ids": []}).status_code == 404
+
+    def test_duration_and_buffer_changes_drive_availability_but_not_existing_appointments(self):
+        day = _booking_day()
+        _set_business_hours(day, time(9, 0), time(11, 0))
+        service_id = _catalog()["Gel Manicure"]["id"]
+        tech = make_tech("Dur Tech", specialties="manicure / pedicure, gel").json()["id"]
+        client.patch(f"/booking-services/{service_id}", json={"duration_minutes": 30})
+        booked = client.post("/appointments", json=_booking_payload(tech, datetime.combine(day, time(9, 0)), [service_id])).json()
+        assert booked["duration_minutes"] == 30
+        client.patch(f"/booking-services/{service_id}", json={"duration_minutes": 90, "price": 50})
+        slots = client.get(f"/availability?date={day.isoformat()}&service_ids={service_id}").json()
+        assert all(slot["total_duration_minutes"] == 90 for slot in slots)
+        stored = [a for a in client.get("/appointments").json() if a["id"] == booked["id"]][0]
+        assert stored["duration_minutes"] == 30
+        assert stored["appointment_services"][0]["duration_minutes_snapshot"] == 30
+
+    def test_catalog_requires_owner_session_and_csrf(self):
+        anonymous = TestClient(app)
+        assert anonymous.get("/booking-services").status_code == 401
+        assert anonymous.post("/booking-services", json={"name": "X Service", "duration_minutes": 30}).status_code == 401
+        assert anonymous.patch("/booking-services/1", json={"is_active": False}).status_code == 401
+        assert anonymous.put("/booking-services/1/technicians", json={"technician_ids": []}).status_code == 401
+        no_csrf = TestClient(app)
+        assert no_csrf.post("/auth/login", json={"password": "test-owner-password"}).status_code == 200
+        assert no_csrf.get("/booking-services").status_code == 200
+        service_id = _catalog()["Gel Manicure"]["id"]
+        assert no_csrf.post("/booking-services", json={"name": "No Csrf", "duration_minutes": 30}).status_code == 403
+        assert no_csrf.patch(f"/booking-services/{service_id}", json={"is_active": False}).status_code == 403
+        assert no_csrf.put(f"/booking-services/{service_id}/technicians", json={"technician_ids": []}).status_code == 403
+        assert "No Csrf" not in _catalog() and _catalog()["Gel Manicure"]["is_active"] is True
+        forged = no_csrf.patch(f"/booking-services/{service_id}", json={"is_active": False}, headers={"X-CSRF-Token": "forged"})
+        assert forged.status_code == 403
+
+    def test_no_delete_endpoint_exists(self):
+        service_id = _catalog()["Gel Manicure"]["id"]
+        assert client.delete(f"/booking-services/{service_id}").status_code == 405
+        assert "Gel Manicure" in _catalog()
+
+    def test_voice_tools_reflect_catalog_edits(self):
+        service_id = _catalog()["Gel Manicure"]["id"]
+        db = SessionLocal()
+        call = voice_foundation.create_call(db, caller_phone="6025551234", called_phone="6025559999", call_id="voice-catalog")
+        facade = voice_foundation.VoiceBookingFacade(db, voice_foundation.VoiceAuthorizationContext(call.id, call.call_id, 0, call.caller_phone_e164, None))
+
+        def details():
+            db.expire_all()
+            return voice_tools.dispatch_voice_tool(facade, object(), "get_service_details", {"service_id": service_id})
+
+        def listed():
+            db.expire_all()
+            return {item["name"]: item for item in voice_tools.dispatch_voice_tool(facade, object(), "list_services", {})}
+
+        assert details()["price"] is None  # NULL price stays NULL: nothing to invent
+        client.patch(f"/booking-services/{service_id}", json={"price": 42.5, "duration_minutes": 55})
+        assert details()["price"] == 42.5 and details()["duration_minutes"] == 55
+        assert listed()["Gel Manicure"]["price"] == 42.5
+        client.patch(f"/booking-services/{service_id}", json={"price": None})
+        assert details()["price"] is None
+        client.patch(f"/booking-services/{service_id}", json={"is_active": False})
+        assert "Gel Manicure" not in listed() and details() is None
+        client.patch(f"/booking-services/{service_id}", json={"is_active": True})
+        assert "Gel Manicure" in listed() and details() is not None
+        _new_service(name="Voice New Service", price=19)
+        assert listed()["Voice New Service"]["price"] == 19.0
+        db.close()
+
+    def test_voice_availability_uses_updated_duration_and_eligibility(self):
+        day = _booking_day()
+        _set_business_hours(day, time(9, 0), time(11, 0))
+        service_id = _catalog()["Gel Manicure"]["id"]
+        make_tech("Voice Slot Tech", specialties="manicure / pedicure, gel")
+        client.patch(f"/booking-services/{service_id}", json={"duration_minutes": 45, "buffer_after_minutes": 15})
+        db = SessionLocal()
+        call = voice_foundation.create_call(db, caller_phone="6025551234", called_phone="6025559999", call_id="voice-slots")
+        facade = voice_foundation.VoiceBookingFacade(db, voice_foundation.VoiceAuthorizationContext(call.id, call.call_id, 0, call.caller_phone_e164, None))
+        slots = voice_tools.dispatch_voice_tool(facade, object(), "get_available_slots", {"date": day.isoformat(), "service_ids": [service_id]})
+        assert slots and all(slot["total_duration_minutes"] == 60 for slot in slots)
+        client.put(f"/booking-services/{service_id}/technicians", json={"technician_ids": []})
+        assert voice_tools.dispatch_voice_tool(facade, object(), "get_available_slots", {"date": day.isoformat(), "service_ids": [service_id]}) == []
+        db.close()
+
+    def test_voice_allowlist_still_has_no_catalog_or_write_tools(self):
+        names = {tool["name"] for tool in voice_tools.READ_ONLY_TOOL_DEFINITIONS}
+        assert names == {"get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback"}

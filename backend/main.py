@@ -17,6 +17,7 @@ import models
 import schemas
 import auth_service
 import notification_service
+import service_catalog
 import voice_foundation
 from realtime_bridge import run_media_bridge
 from twilio_voice import apply_status, build_stream_twiml, validate_called_number, validated_twilio_form
@@ -130,6 +131,11 @@ async def booking_rule_handler(request, exc: booking_service.BookingRuleError):
 @app.exception_handler(booking_service.IdempotencyConflictError)
 async def idempotency_conflict_handler(request, exc: booking_service.IdempotencyConflictError):
     return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(service_catalog.ServiceCatalogError)
+async def service_catalog_handler(request, exc: service_catalog.ServiceCatalogError):
+    return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
 
 
 @app.exception_handler(notification_service.NotificationRuleError)
@@ -319,6 +325,27 @@ def get_business_hours(db: Session = Depends(get_db)):
 @app.get("/services", response_model=list[schemas.BookingServiceOut])
 def get_booking_services(db: Session = Depends(get_db)):
     return booking_service.get_active_services(db)
+
+
+# Owner-only service catalog (not in PUBLIC_OWNER_READS: session required, CSRF on writes).
+@app.get("/booking-services", response_model=list[schemas.BookingServiceAdminOut])
+def get_booking_service_catalog(db: Session = Depends(get_db)):
+    return service_catalog.list_services(db)
+
+
+@app.post("/booking-services", response_model=schemas.BookingServiceAdminOut, status_code=201)
+def create_booking_service(payload: schemas.BookingServiceCreate, db: Session = Depends(get_db)):
+    return service_catalog.create_service(db, payload)
+
+
+@app.patch("/booking-services/{service_id}", response_model=schemas.BookingServiceAdminOut)
+def update_booking_service(service_id: int, payload: schemas.BookingServiceUpdate, db: Session = Depends(get_db)):
+    return service_catalog.update_service(db, service_id, payload)
+
+
+@app.put("/booking-services/{service_id}/technicians", response_model=schemas.BookingServiceAdminOut)
+def set_booking_service_technicians(service_id: int, payload: schemas.BookingServiceTechniciansUpdate, db: Session = Depends(get_db)):
+    return service_catalog.set_service_technicians(db, service_id, payload.technician_ids)
 
 
 @app.get("/availability", response_model=list[schemas.AvailabilitySlot])

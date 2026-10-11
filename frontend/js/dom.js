@@ -10,6 +10,8 @@ const appointmentView = document.getElementById("appointmentView");
 
 const inventoryView = document.getElementById("inventoryView");
 
+const servicesView = document.getElementById("servicesView");
+
 const checkoutView = document.getElementById("checkoutView");
 
 const techIncomeView = document.getElementById("techIncomeView");
@@ -23,6 +25,8 @@ const navTechnician = document.getElementById("navTechnician");
 const navAppointment = document.getElementById("navAppointment");
 
 const navInventory = document.getElementById("navInventory");
+
+const navServices = document.getElementById("navServices");
 
 const navCheckout = document.getElementById("navCheckout");
 

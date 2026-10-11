@@ -1,7 +1,8 @@
 from datetime import date, datetime, time
+from decimal import Decimal
 from typing import Annotated, Optional
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 from phone_normalization import normalize_us_phone
 
 
@@ -617,3 +618,57 @@ class InventoryItemOut(InventoryItemBase):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ----------------------------
+# Owner service catalog
+# ----------------------------
+ServiceName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
+ServicePrice = Annotated[Decimal, Field(ge=0, le=100000, max_digits=8, decimal_places=2)]
+
+
+class _ServiceTextFields(BaseModel):
+    @field_validator("category", "description", check_fields=False)
+    @classmethod
+    def _blank_to_none(cls, value):
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+
+class BookingServiceCreate(_ServiceTextFields):
+    model_config = ConfigDict(extra="forbid")
+
+    name: ServiceName
+    category: Optional[str] = Field(default=None, max_length=60)
+    description: Optional[str] = Field(default=None, max_length=500)
+    duration_minutes: int = Field(ge=5, le=600)
+    price: Optional[ServicePrice] = None
+    buffer_before_minutes: int = Field(default=0, ge=0, le=120)
+    buffer_after_minutes: int = Field(default=0, ge=0, le=120)
+    is_active: bool = True
+
+
+class BookingServiceUpdate(_ServiceTextFields):
+    """Only fields that are sent change. price/category/description may be sent as null."""
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[ServiceName] = None
+    category: Optional[str] = Field(default=None, max_length=60)
+    description: Optional[str] = Field(default=None, max_length=500)
+    duration_minutes: Optional[int] = Field(default=None, ge=5, le=600)
+    price: Optional[ServicePrice] = None
+    buffer_before_minutes: Optional[int] = Field(default=None, ge=0, le=120)
+    buffer_after_minutes: Optional[int] = Field(default=None, ge=0, le=120)
+    is_active: Optional[bool] = None
+
+
+class BookingServiceTechniciansUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    technician_ids: list[int] = Field(max_length=200)
+
+
+class BookingServiceAdminOut(BookingServiceOut):
+    eligible_technician_ids: list[int] = []

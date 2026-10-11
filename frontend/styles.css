@@ -2005,3 +2005,11 @@ label {
 .notification-severity { text-transform: uppercase; font-size: .68rem; letter-spacing: .06em; }
 .notification-severity.urgent { color: #b42318; }
 .notification-severity.warning { color: #9a6700; }
+
+.service-inactive td { opacity: .6; }
+.service-tech-list { display: flex; flex-wrap: wrap; gap: .5rem .9rem; margin-top: .5rem; }
+.service-tech-option, .service-active-option { display: inline-flex; align-items: center; gap: .45rem; font-weight: 600; cursor: pointer; }
+.service-tech-option input, .service-active-option input { width: auto; min-height: 0; }
+.service-active-option { margin-top: .9rem; }
+.service-form-error { margin: .5rem 0 0; padding: .6rem .8rem; border-radius: 12px; background: #fdecea; color: #b42318; white-space: pre-line; }
+.service-form-error.hidden { display: none; }

@@ -2,6 +2,17 @@ document.querySelectorAll("[data-icon]").forEach((el) => {
     el.innerHTML = UI_ICONS[el.dataset.icon] || "";
 });
 
+navServices?.addEventListener("click", async () => {
+    if (!(await requireOwner())) return;
+    try {
+        await renderServicesPage();
+    } catch (error) {
+        showCuteNotification(error.message || "Could not load services.", "Oops");
+        return;
+    }
+    showView("services");
+});
+
 navInventory?.addEventListener("click", async () => {
     if (!(await requireOwner())) return;
     await renderInventory();
@@ -81,7 +92,7 @@ techIncomeRangeType?.addEventListener("change", () => setupRangeInputs(techIncom
 
 saleHistoryRangeType?.addEventListener("change", () => setupRangeInputs(saleHistoryRangeType, saleHistoryRangeStart, saleHistoryRangeEnd));
 
-const OWNER_VIEWS = ["technicianView", "inventoryView", "techIncomeView", "salonIncomeView"];
+const OWNER_VIEWS = ["technicianView", "servicesView", "inventoryView", "techIncomeView", "salonIncomeView"];
 
 let lastActivity = Date.now();
 

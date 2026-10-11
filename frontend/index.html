@@ -27,6 +27,7 @@
         <button id="navCustomerList" class="menu-item">Customer List</button>
         <button id="navTechnician" class="menu-item">Nail Technician</button>
         <button id="navAppointment" class="menu-item">Make Appointment</button>
+        <button id="navServices" class="menu-item">Services</button>
         <button id="navInventory" class="menu-item">Inventory</button>
         <button id="navCheckout" class="menu-item">Checkout</button>
         <button id="navTechIncome" class="menu-item">Technician Income</button>
@@ -485,6 +486,96 @@
         </div>
       </section>
 
+      <!-- ============ SERVICES ============ -->
+      <section id="servicesView" class="view">
+        <header class="topbar">
+          <div>
+            <h2>Services</h2>
+            <p class="subtitle">Durations, prices, buffers and which technicians perform each service. Used by booking and the AI receptionist.</p>
+          </div>
+          <button class="back-btn icon-btn"><span data-icon="arrowLeft"></span>Back</button>
+        </header>
+
+        <div class="form-card" id="serviceFormCard">
+          <div class="section-header">
+            <h3 id="serviceFormTitle">Add Service</h3>
+            <button type="button" id="cancelServiceEditBtn" class="ghost-btn hidden">Cancel Edit</button>
+          </div>
+
+          <form id="serviceForm" class="inventory-form-layout" novalidate>
+            <input type="hidden" id="service_id" />
+            <div class="form-section">
+              <div class="form-grid">
+                <div>
+                  <label for="service_name">Service Name</label>
+                  <input type="text" id="service_name" maxlength="80" placeholder="Gel Manicure" required />
+                </div>
+                <div>
+                  <label for="service_category">Category</label>
+                  <input type="text" id="service_category" maxlength="60" list="serviceCategoryList" placeholder="Manicure" />
+                  <datalist id="serviceCategoryList"></datalist>
+                </div>
+                <div>
+                  <label for="service_duration">Duration (minutes)</label>
+                  <input type="number" id="service_duration" min="5" max="600" step="1" value="60" required />
+                </div>
+                <div>
+                  <label for="service_price">Price ($) - leave blank if not set</label>
+                  <input type="number" id="service_price" min="0" max="100000" step="0.01" placeholder="Not set" />
+                </div>
+                <div>
+                  <label for="service_buffer_before">Buffer Before (minutes)</label>
+                  <input type="number" id="service_buffer_before" min="0" max="120" step="1" value="0" />
+                </div>
+                <div>
+                  <label for="service_buffer_after">Buffer After (minutes)</label>
+                  <input type="number" id="service_buffer_after" min="0" max="120" step="1" value="0" />
+                </div>
+              </div>
+              <label class="service-active-option"><input type="checkbox" id="service_active" checked /> Active (bookable and offered to callers)</label>
+            </div>
+
+            <div class="form-section">
+              <h4>Technicians who can perform this service</h4>
+              <div id="serviceTechnicians" class="service-tech-list"></div>
+            </div>
+
+            <p id="serviceFormError" class="service-form-error hidden" role="alert"></p>
+            <div class="form-actions">
+              <button type="submit" class="primary-btn" id="saveServiceBtn">Save Service</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="form-card">
+          <div class="section-header">
+            <h3>Service List</h3>
+            <div class="toolbar-filters inventory-filters">
+              <input type="text" id="serviceSearch" placeholder="Search service name" />
+              <select id="serviceCategoryFilter"><option value="">All Categories</option></select>
+              <select id="serviceStatusFilter">
+                <option value="">All Status</option>
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </select>
+              <button type="button" id="addServiceBtn" class="primary-btn">Add Service</button>
+            </div>
+          </div>
+
+          <div class="inventory-table-wrap">
+            <table class="inventory-table">
+              <thead>
+                <tr>
+                  <th>Service</th><th>Category</th><th>Duration</th><th>Price</th>
+                  <th>Buffer Before</th><th>Buffer After</th><th>Technicians</th><th>Status</th><th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="serviceTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <!-- ============ CHECKOUT ============ -->
       <section id="checkoutView" class="view">
         <header class="topbar">
@@ -830,6 +921,7 @@
   <script src="js/queue.js" defer></script>
   <script src="js/checkout.js" defer></script>
   <script src="js/inventory.js" defer></script>
+  <script src="js/services.js" defer></script>
   <script src="js/income.js" defer></script>
   <script src="js/notifications.js" defer></script>
   <script src="js/main.js" defer></script>
