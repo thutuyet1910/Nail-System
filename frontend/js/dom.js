@@ -34,8 +34,8 @@ const navTechIncome = document.getElementById("navTechIncome");
 
 const navSalonIncome = document.getElementById("navSalonIncome");
 
-const notificationsBtn = document.getElementById("notificationsBtn");
-const notificationBadge = document.getElementById("notificationBadge");
+const floatingNotificationBtn = document.getElementById("floatingNotificationBtn");
+const floatingNotificationBadge = document.getElementById("floatingNotificationBadge");
 const notificationsPanel = document.getElementById("notificationsPanel");
 const notificationsList = document.getElementById("notificationsList");
 const markAllNotificationsRead = document.getElementById("markAllNotificationsRead");

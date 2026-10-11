@@ -32,7 +32,6 @@
         <button id="navCheckout" class="menu-item">Checkout</button>
         <button id="navTechIncome" class="menu-item">Technician Income</button>
         <button id="navSalonIncome" class="menu-item">Nail Salon Income</button>
-        <button id="notificationsBtn" class="menu-item">Notifications <span id="notificationBadge" class="notification-badge hidden">0</span></button>
         <button id="logoutBtn" class="menu-item">Log Out</button>
       </nav>
 
@@ -842,7 +841,12 @@
     </div>
   </div>
 
-  <div id="notificationsPanel" class="notifications-panel hidden">
+  <button type="button" id="floatingNotificationBtn" class="floating-notification-btn" aria-label="Notifications" aria-controls="notificationsPanel" aria-expanded="false">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+    <span id="floatingNotificationBadge" class="floating-notification-badge hidden" aria-hidden="true">0</span>
+  </button>
+
+  <div id="notificationsPanel" class="notifications-panel hidden" role="dialog" aria-label="Notifications">
     <div class="notifications-header">
       <h3>Notifications</h3>
       <div>

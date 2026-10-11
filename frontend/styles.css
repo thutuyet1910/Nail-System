@@ -1970,19 +1970,6 @@ label {
         grid-template-columns: 1fr;
     }
 }
-.notification-badge {
-  display: inline-flex;
-  min-width: 1.4rem;
-  height: 1.4rem;
-  margin-left: .45rem;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  background: #b42318;
-  color: white;
-  font-size: .75rem;
-}
-
 .notifications-panel {
   position: fixed;
   z-index: 1200;
@@ -2005,6 +1992,50 @@ label {
 .notification-severity { text-transform: uppercase; font-size: .68rem; letter-spacing: .06em; }
 .notification-severity.urgent { color: #b42318; }
 .notification-severity.warning { color: #9a6700; }
+
+.floating-notification-btn {
+  position: fixed;
+  z-index: 1100;
+  right: 80px;
+  top: 110px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--pink-4);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+.floating-notification-btn:hover { background: var(--pink-1); color: var(--pink-5); }
+.floating-notification-btn:focus-visible { outline: 3px solid var(--pink-3); outline-offset: 2px; }
+.floating-notification-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  padding: 0 .3rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #b42318;
+  color: #fff;
+  font-size: .72rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.floating-notification-badge.hidden { display: none; }
+.notification-row small.notification-phone { color: var(--pink-5); font-weight: 700; }
+@media (max-width: 640px) {
+  .floating-notification-btn { right: .5rem; top: auto; bottom: 5rem; transform: none; width: 42px; height: 42px; }
+  .notifications-panel { right: .5rem; left: .5rem; top: .5rem; width: auto; }
+}
 
 .service-inactive td { opacity: .6; }
 .service-tech-list { display: flex; flex-wrap: wrap; gap: .5rem .9rem; margin-top: .5rem; }

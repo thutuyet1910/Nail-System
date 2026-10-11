@@ -626,6 +626,7 @@ setInterval(async () => {
         await loadCheckoutHistory();
     }
     await loadLiveCheckinQueue();
+    await refreshNotificationCount();
 }, 5000);
 
 setInterval(async () => {
