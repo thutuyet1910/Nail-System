@@ -13,6 +13,22 @@ navServices?.addEventListener("click", async () => {
     showView("services");
 });
 
+navSettings?.addEventListener("click", async () => {
+    if (!(await requireOwner())) return;
+    try {
+        await renderSettingsPage();
+    } catch (error) {
+        showCuteNotification(error.message || "Could not load the salon settings.", "Oops");
+        return;
+    }
+    showView("settings");
+});
+
+navOwner?.addEventListener("click", async () => {
+    if (!(await requireOwner())) return;  // password prompt unless the owner is already unlocked
+    navTechnician?.click();
+});
+
 navInventory?.addEventListener("click", async () => {
     if (!(await requireOwner())) return;
     await renderInventory();
@@ -92,30 +108,8 @@ techIncomeRangeType?.addEventListener("change", () => setupRangeInputs(techIncom
 
 saleHistoryRangeType?.addEventListener("change", () => setupRangeInputs(saleHistoryRangeType, saleHistoryRangeStart, saleHistoryRangeEnd));
 
-const OWNER_VIEWS = ["technicianView", "servicesView", "inventoryView", "techIncomeView", "salonIncomeView"];
-
-let lastActivity = Date.now();
-
-["click", "keydown", "mousemove", "touchstart"].forEach((evt) => {
-    document.addEventListener(evt, () => {
-        lastActivity = Date.now();
-    });
-});
-
-setInterval(() => {
-    const onOwnerPage = OWNER_VIEWS.some((id) =>
-        document.getElementById(id)?.classList.contains("active-view")
-    );
-    if (onOwnerPage && Date.now() - lastActivity > 2 * 60 * 1000) {
-        showView("calendar");
-    }
-}, 10000);
-
 document.querySelectorAll(".back-btn").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-        await loadAll();
-        showView("calendar");
-    });
+    btn.addEventListener("click", returnToCalendar);  // instant: last good calendar first, refresh in the background
 });
 
 inventoryForm?.addEventListener("submit", async (e) => {
@@ -355,25 +349,6 @@ techDateOffEnd?.addEventListener("input", applyDateOffStatus);
 
 techDateOffEnd?.addEventListener("change", applyDateOffStatus);
 
-async function loadAll() {
-    installFourDigitYearGuard();
-    await checkApi();
-
-    try {
-        await resetTemporaryUnavailableTechs();
-        await loadBookingServices();
-        syncDefaultSpecialtiesToFilter();
-        await loadTechnicians();
-        await loadAppointments();
-        await loadTodayTurns();
-        await loadCheckoutHistory();
-        await loadLiveCheckinQueue();
-        renderCalendar();
-    } catch (error) {
-        calendarWrapper.innerHTML = `<div class="empty-state">Could not load backend data. Make sure FastAPI is running.</div>`;
-    }
-}
-
 technicianForm?.addEventListener("submit", async (e) => {
     e.preventDefault();
 
@@ -535,7 +510,7 @@ appointmentForm?.addEventListener("submit", async (e) => {
 });
 
 todayBtn?.addEventListener("click", () => {
-    selectedDate = new Date();
+    selectedDate = getSalonToday();
     renderCalendar();
 });
 
@@ -612,26 +587,25 @@ queueAutoAssignBtn?.addEventListener("click", async () => {
 });
 
 async function initializeOwnerDashboard() {
-    if (!(await requireOwner())) return;
+    await ensureStaffSession();  // the dashboard opens in staff mode: no password
     await loadAll();
-    await loadNotifications();
 }
 
 initializeOwnerDashboard();
 
 setInterval(async () => {
-    if (!ownerAuthenticated) return;
+    if (!appSessionReady()) return;
     if (customerListView.classList.contains("active-view")) {
         await loadTodayTurns();
         await loadCheckoutHistory();
     }
     await loadLiveCheckinQueue();
     await refreshNotificationCount();
+    await refreshAppointmentsIfChanged();
 }, 5000);
 
 setInterval(async () => {
-    if (!ownerAuthenticated) return;
-    await resetTemporaryUnavailableTechs();
+    if (!appSessionReady()) return;
     await loadTodayTurns();
     await loadCheckoutHistory();
     await loadLiveCheckinQueue();

@@ -12,6 +12,8 @@ const inventoryView = document.getElementById("inventoryView");
 
 const servicesView = document.getElementById("servicesView");
 
+const settingsView = document.getElementById("settingsView");
+
 const checkoutView = document.getElementById("checkoutView");
 
 const techIncomeView = document.getElementById("techIncomeView");
@@ -28,6 +30,10 @@ const navInventory = document.getElementById("navInventory");
 
 const navServices = document.getElementById("navServices");
 
+const navSettings = document.getElementById("navSettings");
+
+const salonNameHeading = document.getElementById("salonNameHeading");
+
 const navCheckout = document.getElementById("navCheckout");
 
 const navTechIncome = document.getElementById("navTechIncome");
@@ -40,7 +46,9 @@ const notificationsPanel = document.getElementById("notificationsPanel");
 const notificationsList = document.getElementById("notificationsList");
 const markAllNotificationsRead = document.getElementById("markAllNotificationsRead");
 const closeNotifications = document.getElementById("closeNotifications");
-const logoutBtn = document.getElementById("logoutBtn");
+const lockNowBtn = document.getElementById("lockNowBtn");
+const navOwner = document.getElementById("navOwner");
+const ownerNavGroup = document.getElementById("ownerNavGroup");
 
 const preferredTechModal = document.getElementById("preferredTechModal");
 

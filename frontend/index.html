@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
 </head>
-<body>
+<body class="owner-locked">
   <div class="app">
 
     <!-- ============ SIDEBAR ============ -->
@@ -18,21 +18,27 @@
       <div class="logo">
         <div class="logo-mark">✦</div>
         <div>
-          <h1>Nail Salon</h1>
+          <h1 id="salonNameHeading">Nail Salon</h1>
           <p>Salon System</p>
         </div>
       </div>
 
       <nav class="menu">
+        <p class="menu-section">Daily Operations</p>
         <button id="navCustomerList" class="menu-item">Customer List</button>
-        <button id="navTechnician" class="menu-item">Nail Technician</button>
         <button id="navAppointment" class="menu-item">Make Appointment</button>
-        <button id="navServices" class="menu-item">Services</button>
-        <button id="navInventory" class="menu-item">Inventory</button>
         <button id="navCheckout" class="menu-item">Checkout</button>
-        <button id="navTechIncome" class="menu-item">Technician Income</button>
-        <button id="navSalonIncome" class="menu-item">Nail Salon Income</button>
-        <button id="logoutBtn" class="menu-item">Log Out</button>
+
+        <p class="menu-section">Management</p>
+        <button id="navOwner" class="menu-item">Owner Management</button>
+        <div id="ownerNavGroup" class="owner-nav-group owner-only">
+          <button id="navTechnician" class="menu-item">Nail Technician</button>
+          <button id="navServices" class="menu-item">Services</button>
+          <button id="navInventory" class="menu-item">Inventory</button>
+          <button id="navTechIncome" class="menu-item">Technician Income</button>
+          <button id="navSalonIncome" class="menu-item">Nail Salon Income</button>
+          <button id="navSettings" class="menu-item">Salon Settings</button>
+        </div>
       </nav>
 
       <div class="menu-footer">
@@ -97,12 +103,12 @@
         <div class="form-card history-section-card">
           <div class="section-header">
             <h3>Salon History - Checked-Out Today</h3>
-            <button type="button" id="checkoutHistoryAllBtn" class="ghost-btn icon-btn history-all-btn">
+            <button type="button" id="checkoutHistoryAllBtn" class="ghost-btn icon-btn history-all-btn owner-only">
               <span data-icon="clock"></span>Check-Out History
             </button>
           </div>
 
-          <div class="history-range-card">
+          <div class="history-range-card owner-only">
             <div class="history-range-row">
               <div>
                 <label for="saleHistoryRangeType">History Range</label>
@@ -145,7 +151,7 @@
       </section>
 
       <!-- ============ TECHNICIAN ============ -->
-      <section id="technicianView" class="view">
+      <section id="technicianView" class="view owner-view">
         <header class="topbar">
           <div>
             <h2>Add Technician</h2>
@@ -186,7 +192,7 @@
                   <label>Specialties</label>
 
                   <div id="tech_specialties" class="specialty-checkbox-list">
-                    <!-- filled by app.js (DEFAULT_SPECIALTIES) -->
+                    <!-- filled from DEFAULT_SPECIALTIES (technician specialties) -->
                   </div>
                 </div>
 
@@ -299,7 +305,7 @@
                   <label>Services</label>
 
                   <div id="appointment_services" class="specialty-checkbox-list">
-                    <!-- filled by app.js (DEFAULT_APPOINTMENT_SERVICES) -->
+                    <!-- filled from the Owner service catalog (loadBookingServices) -->
                   </div>
                 </div>
               </div>
@@ -347,7 +353,7 @@
       </section>
 
       <!-- ============ INVENTORY ============ -->
-      <section id="inventoryView" class="view">
+      <section id="inventoryView" class="view owner-view">
         <header class="topbar">
           <div>
             <h2>Salon Inventory</h2>
@@ -486,7 +492,7 @@
       </section>
 
       <!-- ============ SERVICES ============ -->
-      <section id="servicesView" class="view">
+      <section id="servicesView" class="view owner-view">
         <header class="topbar">
           <div>
             <h2>Services</h2>
@@ -572,6 +578,87 @@
               <tbody id="serviceTableBody"></tbody>
             </table>
           </div>
+        </div>
+      </section>
+
+      <!-- ============ SALON SETTINGS (owner only) ============ -->
+      <section id="settingsView" class="view owner-view">
+        <header class="topbar">
+          <div>
+            <h2>Salon Settings</h2>
+            <p class="subtitle">Salon information, appointment hours, the AI receptionist and owner security</p>
+          </div>
+          <button class="back-btn icon-btn"><span data-icon="arrowLeft"></span>Back</button>
+        </header>
+
+        <div class="form-card">
+          <div class="section-header"><h3>1. Salon Information</h3></div>
+          <form id="salonProfileForm" class="inventory-form-layout" novalidate>
+            <div class="form-grid">
+              <div>
+                <label for="settings_salon_name">Salon Name</label>
+                <input type="text" id="settings_salon_name" maxlength="80" autocomplete="off" />
+              </div>
+              <div>
+                <label for="settings_salon_phone">Salon Phone (public)</label>
+                <input type="tel" id="settings_salon_phone" maxlength="40" placeholder="Salon phone number" autocomplete="off" />
+                <p id="salonPhoneSaved" class="settings-note"></p>
+              </div>
+              <div>
+                <label for="settings_timezone">Time Zone</label>
+                <input type="text" id="settings_timezone" readonly />
+              </div>
+            </div>
+            <p id="settingsTimezoneNote" class="settings-note"></p>
+            <p id="salonProfileError" class="service-form-error hidden" role="alert"></p>
+            <div class="form-actions"><button type="submit" class="primary-btn">Save Salon Information</button></div>
+          </form>
+        </div>
+
+        <div class="form-card">
+          <div class="section-header"><h3>2. Appointment / Booking Hours</h3></div>
+          <p class="settings-note">These are the hours when NEW appointments can be booked, by staff and by the AI receptionist. They do not stop checkout, customers being served, or existing appointments after closing time.</p>
+          <form id="businessHoursForm" class="inventory-form-layout" novalidate>
+            <div class="inventory-table-wrap">
+              <table class="inventory-table settings-hours-table">
+                <thead><tr><th>Day</th><th>Open</th><th>Opens</th><th>Closes</th></tr></thead>
+                <tbody id="businessHoursBody"></tbody>
+              </table>
+            </div>
+            <p id="businessHoursError" class="service-form-error hidden" role="alert"></p>
+            <div class="form-actions"><button type="submit" class="primary-btn">Save Booking Hours</button></div>
+          </form>
+        </div>
+
+        <div class="form-card">
+          <div class="section-header"><h3>3. Phone / AI Receptionist</h3></div>
+          <dl id="aiStatusList" class="settings-status"></dl>
+          <p id="aiStatusNote" class="settings-note"></p>
+        </div>
+
+        <div class="form-card">
+          <div class="section-header"><h3>4. Owner Security</h3></div>
+          <form id="passwordForm" class="inventory-form-layout" novalidate>
+            <h4>Change Password</h4>
+            <div class="form-grid">
+              <div>
+                <label for="settings_current_password">Current Password</label>
+                <input type="password" id="settings_current_password" maxlength="200" autocomplete="off" />
+              </div>
+              <div>
+                <label for="settings_new_password">New Password</label>
+                <input type="password" id="settings_new_password" maxlength="200" autocomplete="new-password" />
+              </div>
+              <div>
+                <label for="settings_confirm_password">Confirm New Password</label>
+                <input type="password" id="settings_confirm_password" maxlength="200" autocomplete="new-password" />
+              </div>
+            </div>
+            <p id="passwordError" class="service-form-error hidden" role="alert"></p>
+            <div class="form-actions"><button type="submit" class="primary-btn">Change Password</button></div>
+          </form>
+
+          <p class="settings-note" id="ownerPasswordHelp">If the owner password is forgotten, it can be reset locally on the salon computer by an administrator.</p>
         </div>
       </section>
 
@@ -715,7 +802,7 @@
       </section>
 
       <!-- ============ TECHNICIAN INCOME ============ -->
-      <section id="techIncomeView" class="view">
+      <section id="techIncomeView" class="view owner-view">
         <header class="topbar">
           <div>
             <h2>Technician Income</h2>
@@ -774,7 +861,7 @@
       </section>
 
       <!-- ============ SALON INCOME ============ -->
-      <section id="salonIncomeView" class="view">
+      <section id="salonIncomeView" class="view owner-view">
         <header class="topbar">
           <div>
             <h2>Nail Salon Income</h2>
@@ -825,14 +912,14 @@
   </div>
 
 
-  <!-- Owner PIN -->
+  <!-- Owner login -->
   <div id="pinModal" class="cute-notification hidden">
     <div class="cute-notification-card">
       <div class="cute-notification-icon">✦</div>
       <h4>Owner Login</h4>
-      <p>Enter the owner password or PIN to continue.</p>
+      <p>Enter the owner password to continue.</p>
       <div class="appointment-modal-content">
-        <input type="password" id="pinInput" maxlength="128" placeholder="Owner password or PIN" autocomplete="current-password" />
+        <input type="password" id="pinInput" maxlength="128" placeholder="Owner password" autocomplete="current-password" />
       </div>
       <div class="appointment-modal-actions">
         <button type="button" id="pinCancelBtn" class="cute-notification-btn cute-btn-light">Cancel</button>
@@ -841,12 +928,14 @@
     </div>
   </div>
 
-  <button type="button" id="floatingNotificationBtn" class="floating-notification-btn" aria-label="Notifications" aria-controls="notificationsPanel" aria-expanded="false">
+  <button type="button" id="lockNowBtn" class="lock-now-btn owner-only" aria-label="Lock owner access" title="Lock owner access (back to staff mode)">&#128274;</button>
+
+  <button type="button" id="floatingNotificationBtn" class="floating-notification-btn owner-only" aria-label="Notifications" aria-controls="notificationsPanel" aria-expanded="false">
     <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
     <span id="floatingNotificationBadge" class="floating-notification-badge hidden" aria-hidden="true">0</span>
   </button>
 
-  <div id="notificationsPanel" class="notifications-panel hidden" role="dialog" aria-label="Notifications">
+  <div id="notificationsPanel" class="notifications-panel owner-only hidden" role="dialog" aria-label="Notifications">
     <div class="notifications-header">
       <h3>Notifications</h3>
       <div>
@@ -926,8 +1015,12 @@
   <script src="js/checkout.js" defer></script>
   <script src="js/inventory.js" defer></script>
   <script src="js/services.js" defer></script>
+  <script src="js/salon-settings.js" defer></script>
   <script src="js/income.js" defer></script>
   <script src="js/notifications.js" defer></script>
+  <script src="js/calendar-refresh.js" defer></script>
+  <script src="js/dashboard-load.js" defer></script>
+  <script src="js/ownerlock.js" defer></script>
   <script src="js/main.js" defer></script>
 </body>
 </html>

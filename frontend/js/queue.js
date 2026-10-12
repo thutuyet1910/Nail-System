@@ -13,13 +13,6 @@ function isSameCustomer(nameA, phoneA, nameB, phoneB) {
     return Boolean(normalizedNameA && normalizedNameB && normalizedNameA === normalizedNameB);
 }
 
-// When the customer checked in, in milliseconds (null if the check-in app sent no usable time).
-function getCheckinTimeMs(item) {
-    if (!item?.checked_in_at) return null;
-    const ms = new Date(item.checked_in_at).getTime();
-    return Number.isNaN(ms) ? null : ms;
-}
-
 // Working today: marked active and available today (the same test the backend uses).
 function isAvailableToday(tech) {
     const status = String(tech.status || "").trim().toLowerCase();

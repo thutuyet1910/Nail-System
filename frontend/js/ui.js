@@ -1,4 +1,4 @@
-// ui.js: Icons, notifications, confirm box, PIN, switching views
+// ui.js: Icons, notifications, confirm box, owner login prompt, switching views
 
 const TECH_ICONS = {
     calendar: `<svg class="tech-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="3"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>`,
@@ -29,6 +29,7 @@ function showView(view) {
         technician: [technicianView, navTechnician],
         appointment: [appointmentView, navAppointment],
         services: [servicesView, navServices],
+        settings: [settingsView, navSettings],
         inventory: [inventoryView, navInventory],
         checkout: [checkoutView, navCheckout],
         techIncome: [techIncomeView, navTechIncome],
@@ -71,18 +72,57 @@ function askPin() {
     });
 }
 
+// Staff mode: a password-free session that only reaches the daily-operations routes on the backend.
+let staffSessionInFlight = null;
+
+async function ensureStaffSession() {
+    // Concurrent callers (several requests all hitting an expired session) share ONE request.
+    if (!staffSessionInFlight) {
+        staffSessionInFlight = (async () => {
+            try {
+                const response = await fetch(`${API_BASE}/auth/staff-session`, { method: "POST", credentials: "include" });
+                staffReady = response.ok;
+            } catch {
+                staffReady = false;
+            }
+            return staffReady;
+        })().finally(() => { staffSessionInFlight = null; });
+    }
+    return staffSessionInFlight;
+}
+
+// Pollers for staff-level data run whenever either kind of session is active.
+function appSessionReady() {
+    return staffReady || ownerAuthenticated;
+}
+
+let ownerUnlockInFlight = null;
+
+// Resolves true once the owner is unlocked. While locked (including every fresh page load) the
+// password is ALWAYS asked for and verified by the backend; an existing server session alone is
+// never enough to unlock.
 async function requireOwner() {
-    try {
-        const session = await fetchJson(`${API_BASE}/auth/session`);
-        if (session.authenticated) {
-            ownerAuthenticated = true;
-            ownerSessionExpiresAt = session.expires_at;
-            return true;
+    if (!ownerLocked) {
+        try {
+            const session = await fetchJson(`${API_BASE}/auth/session`);
+            if (session.authenticated) {
+                ownerAuthenticated = true;
+                ownerSessionExpiresAt = session.expires_at;
+                return true;
+            }
+        } catch {
+            // fall through: the server session is gone, so the password is needed again
         }
-    } catch {
         ownerAuthenticated = false;
     }
-    const entered = await askPin();
+    if (!ownerUnlockInFlight) {
+        ownerUnlockInFlight = unlockWithPassword().finally(() => { ownerUnlockInFlight = null; });
+    }
+    return ownerUnlockInFlight;
+}
+
+async function unlockWithPassword() {
+    const entered = await askPin();  // the input is cleared by askPin; the value lives only in this call
     if (entered === null) return false;
 
     try {
@@ -92,12 +132,14 @@ async function requireOwner() {
         });
         ownerAuthenticated = true;
         ownerSessionExpiresAt = session.expires_at;
-        return true;
     } catch (error) {
         ownerAuthenticated = false;
-        showCuteNotification(error.message || "Incorrect owner password/PIN.", "Oops");
+        const tooMany = /too many/i.test(String(error && error.message));
+        showCuteNotification(tooMany ? "Too many attempts. Please wait a few minutes and try again." : "Incorrect password.", "Oops");
         return false;
     }
+    await markOwnerUnlocked();
+    return true;
 }
 
 function showCuteNotification(message, title = "Success") {

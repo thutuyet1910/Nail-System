@@ -99,16 +99,3 @@ markAllNotificationsRead?.addEventListener("click", async () => {
     await fetchJson(`${API_BASE}/notifications/read-all`, { method: "POST" });
     await loadNotifications();
 });
-
-logoutBtn?.addEventListener("click", async () => {
-    try {
-        await fetchJson(`${API_BASE}/auth/logout`, { method: "POST" });
-    } finally {
-        ownerAuthenticated = false;
-        ownerSessionExpiresAt = null;
-        setNotificationsPanelOpen(false);
-        ownerNotifications = [];
-        setUnreadBadges(0);
-        showCuteNotification("You have been logged out.", "Owner session");
-    }
-});

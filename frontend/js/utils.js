@@ -202,13 +202,16 @@ async function fetchJson(url, options = {}) {
 
     try {
         const method = String(options.method || "GET").toUpperCase();
-        const csrfToken = document.cookie
-            .split("; ")
-            .find((item) => item.startsWith("owner_csrf="))
-            ?.split("=").slice(1).join("=");
+        const readCookie = (name) => {
+            const raw = document.cookie.split("; ").find((item) => item.startsWith(`${name}=`))?.split("=").slice(1).join("=");
+            return raw ? decodeURIComponent(raw) : null;
+        };
         const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-        if (!["GET", "HEAD", "OPTIONS"].includes(method) && csrfToken) {
-            headers["X-CSRF-Token"] = decodeURIComponent(csrfToken);
+        if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+            const ownerCsrf = readCookie("owner_csrf");
+            const staffCsrf = readCookie("staff_csrf");
+            if (ownerCsrf) headers["X-CSRF-Token"] = ownerCsrf;           // owner session
+            if (staffCsrf) headers["X-Staff-CSRF-Token"] = staffCsrf;     // staff session
         }
         response = await fetch(url, {
             credentials: "include",
@@ -221,6 +224,14 @@ async function fetchJson(url, options = {}) {
     }
 
     if (!response.ok) {
+        if (response.status === 401 && !options.__retried && typeof ensureStaffSession === "function") {
+            // The staff session lapsed (for example the backend restarted): quietly start a new one once.
+            let detail = "";
+            try { detail = (await response.clone().json()).detail; } catch { /* not JSON */ }
+            if (detail === "Staff session required" && (await ensureStaffSession())) {
+                return fetchJson(url, { ...options, __retried: true });
+            }
+        }
         let message = "Request failed";
         try {
             const err = await response.clone().json();

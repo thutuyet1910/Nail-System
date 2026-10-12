@@ -1,7 +1,9 @@
 // config.js: Settings and constant lists
 const API_BASE = "http://127.0.0.1:8001";
 
-const CHECKIN_API_BASE = "http://127.0.0.1:8000";
+// The salon clock (matches the backend default). The current-time line follows THIS zone,
+// never the zone of the computer the dashboard happens to be open on.
+const SALON_TIMEZONE = "America/Phoenix";
 
 const SCHEDULE_DAYS = [
     { key: "monday", label: "Monday", short: "Mon" },
@@ -25,39 +27,7 @@ const DEFAULT_SPECIALTIES = [
     "Facial",
 ];
 
-const DEFAULT_APPOINTMENT_SERVICES = [
-    "Acrylic Full Set",
-    "Acrylic Fill",
-    "Gel Full Set",
-    "Gel Fill",
-    "Dip Powder",
-    "Pink and White",
-    "Ombre Nails",
-    "Builder Gel",
-    "Classic Manicure",
-    "Gel Manicure",
-    "Deluxe Manicure",
-    "Classic Pedicure",
-    "Deluxe Pedicure",
-    "Spa Pedicure",
-    "Jelly Pedicure",
-    "Polish Change - Hands",
-    "Polish Change - Feet",
-    "Nail Repair",
-    "Nail Removal",
-    "French Tip",
-    "Nail Art",
-    "Chrome / Cat Eye",
-    "Paraffin Treatment",
-    "Waxing - Eyebrows",
-    "Waxing - Lip",
-    "Waxing - Chin",
-    "Facial",
-];
-
 const REMOVED_SPECIALTIES_STORAGE_KEY = "ownerRemovedSpecialties";
-
-const TECH_UNAVAILABLE_TODAY_STORAGE_KEY = "ownerTechUnavailableToday";
 
 // MUST stay identical to SERVICE_TO_SPECIALTIES in backend/crud.py.
 // The backend is the one that finally accepts or rejects an assignment; this copy only

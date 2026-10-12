@@ -10,6 +10,13 @@ let techniciansAll = [];
 
 let appointments = [];
 
+// True once appointments have loaded successfully at least once: from then on the calendar is only ever
+// replaced by newer data, never by an error (see dashboard-load.js).
+let calendarHasLoaded = false;
+
+// Weekly salon hours from the backend (GET /business-hours): the one source for what is bookable.
+let businessHours = [];
+
 // Authoritative booking catalog loaded from the owner backend.
 let bookingServices = [];
 
@@ -55,4 +62,12 @@ let inventoryItems = [];
 
 let ownerAuthenticated = false;
 let ownerSessionExpiresAt = null;
+
+// Staff mode (no password) is the normal state of the dashboard; owner privilege sits on top of it.
+let staffReady = false;
+
+// Owner lock (see ownerlock.js): true = owner privilege is OFF. In memory only: every page load starts
+// in staff mode.
+let ownerLocked = true;
+let ownerLastActivity = Date.now();
 let ownerNotifications = [];

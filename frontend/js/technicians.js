@@ -224,11 +224,9 @@ function syncDefaultSpecialtiesToFilter() {
 
     if (appointmentServicesBox && appointmentServicesBox.dataset.syncedDefaultServices !== "true") {
         appointmentServicesBox.innerHTML = "";
-        const appointmentServiceNames = bookingServices.length
-            ? bookingServices.map((service) => service.name)
-            : DEFAULT_APPOINTMENT_SERVICES;
-        appointmentServiceNames.forEach((service) => {
-            appointmentServicesBox.appendChild(createSpecialtyCheckbox(service));
+        // The Owner service catalog is the only source (loadBookingServices fills it with service IDs).
+        bookingServices.forEach((service) => {
+            appointmentServicesBox.appendChild(createSpecialtyCheckbox(service.name));
         });
         appointmentServicesBox.dataset.syncedDefaultServices = "true";
     }
@@ -396,18 +394,6 @@ function getAvailabilityDisplayText(availability) {
     return availability || "unknown";
 }
 
-function getTemporaryUnavailableMap() {
-    try {
-        return JSON.parse(localStorage.getItem(TECH_UNAVAILABLE_TODAY_STORAGE_KEY) || "{}") || {};
-    } catch {
-        return {};
-    }
-}
-
-function saveTemporaryUnavailableMap(map) {
-    localStorage.setItem(TECH_UNAVAILABLE_TODAY_STORAGE_KEY, JSON.stringify(map || {}));
-}
-
 async function setTechnicianUnavailableToday(techId) {
     await fetchJson(`${API_BASE}/technicians/${techId}`, {
         method: "PUT",
@@ -417,49 +403,6 @@ async function setTechnicianUnavailableToday(techId) {
         }),
     });
 
-    const map = getTemporaryUnavailableMap();
-    map[String(techId)] = getLocalDateKey();
-    saveTemporaryUnavailableMap(map);
-}
-
-async function resetTemporaryUnavailableTechs() {
-    const map = getTemporaryUnavailableMap();
-    const today = getLocalDateKey();
-    const expiredIds = Object.keys(map).filter((techId) => map[techId] !== today);
-
-    if (!expiredIds.length) return;
-
-    let rawTechs = [];
-    try {
-        rawTechs = await fetchJson(`${API_BASE}/technicians`);
-    } catch {
-        return;
-    }
-
-    for (const techId of expiredIds) {
-        const tech = rawTechs.find((item) => Number(item.id) === Number(techId));
-        const availability = String(tech?.availability || "").trim().toLowerCase();
-
-        if (availability.startsWith("date off:")) {
-            delete map[techId];
-            continue;
-        }
-
-        try {
-            await fetchJson(`${API_BASE}/technicians/${techId}`, {
-                method: "PUT",
-                body: JSON.stringify({
-                    status: "active",
-                    availability: "available today",
-                }),
-            });
-            delete map[techId];
-        } catch (error) {
-            console.warn("Could not reset technician availability", techId, error);
-        }
-    }
-
-    saveTemporaryUnavailableMap(map);
 }
 
 function getTechnicianAvatar(tech) {

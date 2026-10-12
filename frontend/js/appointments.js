@@ -155,6 +155,14 @@ function populateAppointmentTechnicianDropdown() {
     });
 }
 
+async function loadBusinessHours() {
+    try {
+        businessHours = await fetchJson(`${API_BASE}/business-hours`);
+    } catch (error) {
+        console.error("Could not load business hours:", error);  // the calendar keeps its last (or default) hours
+    }
+}
+
 async function loadAppointments() {
     appointments = await fetchJson(`${API_BASE}/appointments`);
 }
