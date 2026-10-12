@@ -1,7 +1,6 @@
 import json
 import re
 from datetime import datetime, time, timedelta
-from decimal import Decimal
 
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
@@ -93,6 +92,9 @@ def ensure_booking_columns() -> None:
         idem_columns = {column[1] for column in connection.execute(text("PRAGMA table_info(booking_idempotency_records)")).fetchall()}
         if idem_columns and "request_hash" not in idem_columns:
             connection.execute(text("ALTER TABLE booking_idempotency_records ADD COLUMN request_hash VARCHAR"))
+        technician_columns = {column[1] for column in connection.execute(text("PRAGMA table_info(technicians)")).fetchall()}
+        if technician_columns and "unavailable_on" not in technician_columns:
+            connection.execute(text("ALTER TABLE technicians ADD COLUMN unavailable_on DATE"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_appointments_phone_e164 ON appointments (customer_phone_e164)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_turns_phone_e164 ON turns (customer_phone_e164)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_turns_appointment_id ON turns (appointment_id)"))

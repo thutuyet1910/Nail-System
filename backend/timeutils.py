@@ -32,16 +32,6 @@ def utc_naive_to_local(value: datetime, timezone_name: str = DEFAULT_SALON_TIMEZ
     return value.replace(tzinfo=timezone.utc).astimezone(salon_zone(timezone_name))
 
 
-def local_day_bounds_utc(day: date, timezone_name: str = DEFAULT_SALON_TIMEZONE) -> tuple[datetime, datetime]:
-    zone = salon_zone(timezone_name)
-    start = datetime.combine(day, time.min, tzinfo=zone)
-    end = datetime.combine(day, time.max, tzinfo=zone)
-    return (
-        start.astimezone(timezone.utc).replace(tzinfo=None),
-        end.astimezone(timezone.utc).replace(tzinfo=None),
-    )
-
-
 def utc_now_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 

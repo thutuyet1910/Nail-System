@@ -11,6 +11,7 @@ Flow enforced here (not just in the prompt):
   4. booking_service.create_booking does the transactional recheck + idempotent insert.
 Only IDs that the backend itself offered on this call can be booked; free-text times are impossible.
 """
+import difflib
 import hashlib
 import re
 import secrets
@@ -68,32 +69,77 @@ def is_explicit_confirmation(text) -> bool:
 
 
 # ---------------------------------------------------------------- offers (get_available_slots)
-def _resolve_technician(db, technician_id, technician_name) -> int | None:
-    if technician_id is not None:
-        return int(technician_id)
-    wanted = " ".join(str(technician_name or "").split()).lower()
+TECH_UNKNOWN = ("No active technician matches that name. Ask the caller to repeat or spell the name, or ask whether any "
+                "available technician is acceptable. Do NOT switch to another technician unless the caller agrees.")
+TECH_AMBIGUOUS = ("More than one technician matches that name. Ask the caller for the full name, or whether any available "
+                  "technician is acceptable. Do NOT pick one yourself.")
+
+
+def _norm_name(value) -> str:
+    return " ".join(re.sub(r"[^\w\s'\-]", " ", str(value or "")).lower().split())
+
+
+def _name_keys(technician) -> list[str]:
+    full = _norm_name(technician.full_name)
+    return [full] + ([full.split(" ")[0]] if " " in full else [])
+
+
+def _resolve_technician(db, technician_name, service_ids) -> models.Technician | None:
+    """The caller named a technician: resolve exactly ONE active technician who performs every selected
+    service, or fail with an instruction. Never guesses among several and never falls back to 'any'.
+    Case, spacing and punctuation are ignored; a first name or the full name match exactly; a close
+    spelling (speech-to-text) matches only when it is clearly unique. The caller hears the resolved name
+    in the booking summary before anything is booked."""
+    wanted = _norm_name(technician_name)
     if not wanted:
         return None
-    matches = [t for t in db.query(models.Technician).filter(models.Technician.is_active.is_(True)).all()
-               if t.full_name.strip().lower() == wanted or t.full_name.strip().lower().split(" ")[0] == wanted]
-    if len(matches) != 1:
-        raise VoiceFoundationError("Could not match exactly one technician by that name. Ask the caller to confirm, or offer any available technician.")
-    return matches[0].id
+    active = db.query(models.Technician).filter(models.Technician.is_active.is_(True)).order_by(models.Technician.id).all()
+    exact = [t for t in active if wanted in _name_keys(t)]
+    if len(exact) > 1:
+        raise VoiceFoundationError(TECH_AMBIGUOUS)
+    if len(exact) == 1:
+        chosen = exact[0]
+    else:
+        scored = sorted(
+            ((max(difflib.SequenceMatcher(None, wanted, key).ratio() for key in _name_keys(t)), t) for t in active),
+            key=lambda item: -item[0],
+        )
+        if not scored or scored[0][0] < 0.8 or (len(scored) > 1 and scored[1][0] > scored[0][0] - 0.1):
+            raise VoiceFoundationError(TECH_UNKNOWN)
+        chosen = scored[0][1]
+    if chosen.id not in {t.id for t in booking_service._eligible_technicians(db, service_ids)}:
+        raise VoiceFoundationError(
+            f"{chosen.full_name} does not perform all of those services. Tell the caller, and offer another technician "
+            "who does (see get_service_details) or any available technician only if the caller agrees.")
+    return chosen
 
 
 def offer_slots(facade, day: str, service_ids, technician_id=None, technician_name=None) -> list[dict]:
+    """technician_id is accepted for internal callers only; the voice tool exposes technician_name alone."""
     db, context = facade.db, facade.context
     ids = list(service_ids or [])
     if not ids or len(ids) > MAX_SERVICES_PER_BOOKING or any(isinstance(i, bool) or not isinstance(i, int) for i in ids):
         raise VoiceFoundationError("service_ids must be 1 to 5 service ids from list_services.")
-    tech_id = _resolve_technician(db, technician_id, technician_name)
+    try:
+        booking_service.calculate_service_plan(db, ids)
+    except booking_service.BookingRuleError:
+        raise VoiceFoundationError("Those services cannot be scheduled. Check list_services and try again.")
+    chosen = _resolve_technician(db, technician_name, ids) if technician_name else None
+    tech_id = chosen.id if chosen else (int(technician_id) if technician_id is not None else None)
+    tech_label = chosen.full_name if chosen else None
     try:
         slots = booking_service.generate_available_slots(db, date.fromisoformat(day), ids, technician_id=tech_id)
     except booking_service.BookingRuleError:
         raise VoiceFoundationError("Those services cannot be scheduled. Check list_services and try again.")
+    if tech_id is not None and not slots:
+        who = tech_label or "That technician"
+        raise VoiceFoundationError(
+            f"{who} has no openings on that date for these services. Tell the caller, and offer a different date with "
+            f"{who}, or ask whether any available technician is acceptable. Do NOT switch without the caller's agreement.")
     result = [{
         "start": slot["start"].isoformat(), "end": slot["end"].isoformat(), "timezone": slot["timezone"],
         "total_duration_minutes": slot["total_duration_minutes"],
+        **({"technician": tech_label} if tech_label else {}),
     } for slot in slots]
     if slots:
         offer_id = secrets.token_hex(4)
@@ -101,7 +147,7 @@ def offer_slots(facade, day: str, service_ids, technician_id=None, technician_na
         voice_foundation.append_call_event(
             db, call=call, event_type="booking_lookup", result_status="success", operation_key=f"offer:{offer_id}",
             metadata={"offer_id": offer_id, "service_ids": ids, "technician_id": tech_id,
-                      "slots": [item["start"] for item in result]},
+                      "technician_requested": tech_id is not None, "slots": [item["start"] for item in result]},
         )
         for index, item in enumerate(result):
             item["slot_id"] = f"{offer_id}-{index}"
@@ -217,7 +263,7 @@ def create_booking(facade, args: dict) -> dict:
         appointment = booking_service.create_booking(db, schemas.AppointmentCreate(
             customer_name=name, customer_phone=phone, service_category="Phone booking",
             appointment_time=datetime.fromisoformat(start_iso), service_ids=service_ids,
-            technician_id=technician_id, customer_type="new", note="Booked by the AI phone receptionist",
+            technician_id=technician_id, preferred_technician_id=technician_id, customer_type="new", note="Booked by the AI phone receptionist",
             idempotency_key=f"voice:{call.call_id}:{slot_id}"[:200],
         ))
     except booking_service.IdempotencyConflictError:

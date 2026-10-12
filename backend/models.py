@@ -30,6 +30,8 @@ class Technician(Base):
 
    
     is_active = Column(Boolean, nullable=False, default=True, server_default=true())
+    # The salon date a technician was marked "unavailable today"; the daily rollover (crud.py) clears it.
+    unavailable_on = Column(Date, nullable=True)
 
     appointments = relationship(
         "Appointment",

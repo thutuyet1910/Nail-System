@@ -4248,7 +4248,7 @@ class TestVoiceAppointmentCreation:
         with pytest.raises(FAIL, match="no longer available"):
             env.tool("create_booking", **args, caller_confirmation="yes")  # Zed is free but the caller asked for Amy
         assert env.appointments() == 1
-        with pytest.raises(FAIL, match="exactly one technician"):
+        with pytest.raises(FAIL, match="No active technician matches"):
             env.tool("get_available_slots", date=env.day.isoformat(), service_ids=[env.service_id], technician_name="Nobody")
         env.close()
 
@@ -4383,3 +4383,274 @@ class TestVoiceAppointmentCreation:
         result = env.tool("request_owner_callback", category="reschedule", urgency="normal", summary="Wants to move an appointment")
         assert result == {"requested": True}  # unsupported requests still go to the owner
         env.close()
+
+
+# ── Preferred-technician booking ──────────────────────────────────────────────
+
+def _at(slots, hhmm):
+    return next(s for s in slots if f"T{hhmm}" in s["start"])
+
+
+def _slots(env, **extra):
+    return env.tool("get_available_slots", date=env.day.isoformat(), service_ids=[env.service_id], **extra)
+
+
+class TestPreferredTechnicianBooking:
+    def env(self, sid, techs=("Holy Nguyen", "Andy Tran")):
+        return VoiceBookingEnv(sid, techs=techs)
+
+    def test_the_named_technician_is_resolved_and_every_slot_is_theirs(self):
+        env = self.env("CA-pt1")
+        slots = _slots(env, technician_name="Holy")
+        assert slots and all(s["technician"] == "Holy Nguyen" for s in slots)
+        verify = SessionLocal()
+        offer = verify.query(models.VoiceCallEvent).filter(models.VoiceCallEvent.operation_key == f"offer:{slots[0]['slot_id'].split('-')[0]}").one()
+        assert offer.metadata_json["technician_id"] == env.tech_ids[0] and offer.metadata_json["technician_requested"] is True
+        verify.close(); env.close()
+
+    @pytest.mark.parametrize("spoken", ["holy", "HOLY", "  Holy  ", "Holy Nguyen", "holy nguyen.", "Holy, ", "hOlY  nGuYeN"])
+    def test_case_whitespace_and_punctuation_are_normalised(self, spoken):
+        env = self.env("CA-pt2")
+        assert {s["technician"] for s in _slots(env, technician_name=spoken)} == {"Holy Nguyen"}
+        env.close()
+
+    def test_a_clearly_unique_close_spelling_resolves_and_the_summary_shows_the_real_name(self):
+        env = self.env("CA-pt3")
+        slots = _slots(env, technician_name="Holly")  # speech-to-text variant
+        assert {s["technician"] for s in slots} == {"Holy Nguyen"}
+        prepared = env.tool("create_booking", slot_id=_at(slots, "10:00")["slot_id"], customer_name="Maria Lopez")
+        assert prepared["summary"]["technician"] == "Holy Nguyen"  # the caller hears the canonical name before confirming
+        env.close()
+
+    def test_unknown_ambiguous_inactive_and_ineligible_technicians_fail_with_no_fallback(self):
+        env = self.env("CA-pt4", techs=("Holy Nguyen", "Sam Lee", "Sam Ray"))
+        for bad in ("Zzzzz", "Qwerty Uiop", "Bob"):
+            with pytest.raises(FAIL, match="No active technician matches"):
+                _slots(env, technician_name=bad)
+        with pytest.raises(FAIL, match="More than one technician"):
+            _slots(env, technician_name="Sam")
+        assert {s["technician"] for s in _slots(env, technician_name="Sam Lee")} == {"Sam Lee"}
+        db = SessionLocal()
+        db.get(models.Technician, env.tech_ids[0]).is_active = False
+        db.commit(); db.close()
+        with pytest.raises(FAIL, match="No active technician matches"):
+            _slots(env, technician_name="Holy")
+        wax = make_tech("Wanda Wax", specialties="waxing").json()["id"]
+        with pytest.raises(FAIL, match="does not perform all of those services"):
+            _slots(env, technician_name="Wanda")
+        env.close()
+
+    def test_requested_technician_busy_at_the_time_never_falls_back_to_someone_else(self):
+        env = self.env("CA-pt5")
+        any_slots = _slots(env)
+        assert _at(any_slots, "10:00")  # generic availability exists at 10:00
+        client.post("/appointments", json=_booking_payload(env.tech_ids[0], datetime.combine(env.day, time(10, 0)), [env.service_id], customer_name="Walk In"))
+        holy = _slots(env, technician_name="Holy")
+        assert not any("T10:00" in s["start"] for s in holy), "Holy is busy at 10:00; Andy being free must not leak in"
+        assert all(s["technician"] == "Holy Nguyen" for s in holy)
+        assert any("T10:00" in s["start"] for s in _slots(env)), "caller agreed to anyone: Andy is offered"
+        env.close()
+
+    def test_no_openings_for_the_named_technician_is_an_explicit_instruction_not_an_empty_list(self):
+        env = self.env("CA-pt6")
+        _set_tech_schedule(env.tech_ids[0], env.day, working=False)
+        with pytest.raises(FAIL, match="Holy Nguyen has no openings.*Do NOT switch") as raised:
+            _slots(env, technician_name="holy")
+        assert "agree" in str(raised.value)
+        assert _slots(env)  # 'anyone' still works once the caller agrees
+        env.close()
+
+    def test_the_slot_id_is_bound_to_the_technician_and_cannot_be_redirected(self):
+        env = self.env("CA-pt7")
+        holy_slot = _at(_slots(env, technician_name="Holy"), "10:00")
+        any_slot = _at(_slots(env), "10:00")
+        args = {"slot_id": holy_slot["slot_id"], "customer_name": "Maria Lopez"}
+        # model-supplied technician fields are ignored by create_booking and get_available_slots
+        env.tool("create_booking", **args, technician_id=env.tech_ids[1], technician_name="Andy")
+        env.hear_caller()
+        booked = env.tool("create_booking", **args, caller_confirmation="yes", technician_id=env.tech_ids[1], technician_name="Andy")
+        assert booked["technician"] == "Holy Nguyen"
+        verify = SessionLocal()
+        appointment = verify.query(models.Appointment).one()
+        assert appointment.technician_id == env.tech_ids[0] and appointment.preferred_technician_id == env.tech_ids[0]
+        verify.close()
+        # a generic slot cannot be turned into Holy either: it books whoever the picker chooses, unchanged semantics
+        assert any_slot["slot_id"] != holy_slot["slot_id"] and "technician" not in any_slot
+        env.close()
+
+    def test_the_model_cannot_fabricate_a_technician_id(self):
+        env = self.env("CA-pt8")
+        slots = env.tool("get_available_slots", date=env.day.isoformat(), service_ids=[env.service_id], technician_id=env.tech_ids[1])
+        assert slots and all("technician" not in s for s in slots)  # ignored: this is an 'anyone' offer
+        verify = SessionLocal()
+        offer = verify.query(models.VoiceCallEvent).filter(models.VoiceCallEvent.operation_key == f"offer:{slots[0]['slot_id'].split('-')[0]}").one()
+        assert offer.metadata_json["technician_id"] is None and offer.metadata_json["technician_requested"] is False
+        verify.close()
+        assert "technician_id" not in str(voice_tools.READ_ONLY_TOOL_DEFINITIONS[3]["parameters"])
+        env.close()
+
+    def test_holy_becoming_unavailable_between_offer_and_confirmation_fails_without_substituting(self):
+        env = self.env("CA-pt9")
+        slot = _at(_slots(env, technician_name="Holy"), "10:00")
+        args = {"slot_id": slot["slot_id"], "customer_name": "Maria Lopez"}
+        assert env.tool("create_booking", **args)["summary"]["technician"] == "Holy Nguyen"
+        client.post("/appointments", json=_booking_payload(env.tech_ids[0], datetime.combine(env.day, time(10, 0)), [env.service_id], customer_name="Walk In"))
+        env.hear_caller()
+        with pytest.raises(FAIL, match="no longer available"):
+            env.tool("create_booking", **args, caller_confirmation="yes")
+        verify = SessionLocal()
+        assert [(a.customer_name, a.technician_id) for a in verify.query(models.Appointment)] == [("Walk In", env.tech_ids[0])]
+        verify.close(); env.close()
+
+    def test_duplicate_preferred_technician_confirmation_is_idempotent(self):
+        env = self.env("CA-pt10")
+        slot = _at(_slots(env, technician_name="Holy"), "11:00")
+        args = {"slot_id": slot["slot_id"], "customer_name": "Maria Lopez"}
+        env.tool("create_booking", **args)
+        env.hear_caller()
+        first = env.tool("create_booking", **args, caller_confirmation="yes")
+        second = env.tool("create_booking", **args, caller_confirmation="yes")
+        assert first == second and first["technician"] == "Holy Nguyen" and env.appointments() == 1
+        env.close()
+
+    def test_anyone_still_books_with_an_eligible_technician(self):
+        env = self.env("CA-pt11")
+        slot = _at(_slots(env), "10:00")
+        args = {"slot_id": slot["slot_id"], "customer_name": "Maria Lopez"}
+        env.tool("create_booking", **args)
+        env.hear_caller()
+        booked = env.tool("create_booking", **args, caller_confirmation="sure, go ahead")
+        assert booked["status"] == "booked" and booked["technician"] in ("Holy Nguyen", "Andy Tran")
+        env.close()
+
+    def test_canonical_technician_names_are_available_to_the_model_without_private_data(self):
+        env = self.env("CA-pt12")
+        details = env.tool("get_service_details", service_id=env.service_id)
+        assert details["technicians"] == ["Andy Tran", "Holy Nguyen"]
+        listed = {s["name"]: s for s in env.tool("list_services")}
+        assert all("technicians" not in s for s in listed.values()), "a service list never carries staff names"
+        assert "Reference only" in details["technicians_note"]
+        blob = str(details)
+        for private in ("phone", "schedule", "income", "notes", "employee", "specialties", "email"):
+            assert private not in blob.lower()
+        assert all(isinstance(name, str) for name in details["technicians"])
+        env.close()
+
+    def test_prompt_makes_a_named_technician_a_hard_requirement(self):
+        text = realtime_bridge.receptionist_instructions("Test Nails", "America/Phoenix")
+        assert "ALWAYS pass technician_name" in text and "hard requirement, never a preference" in text
+        assert "ONLY after the caller agrees" in text and "the technician's name" in text
+        assert "name only the technician it returns" in text
+        definitions = {t["name"]: t for t in voice_tools.READ_ONLY_TOOL_DEFINITIONS}
+        assert "ALWAYS pass technician_name" in definitions["get_available_slots"]["description"]
+        assert {t["name"] for t in definitions.values()} == {"get_salon_info", "list_services", "get_service_details", "get_available_slots",
+                                                              "identify_customer_candidate", "request_owner_callback", "create_booking"}
+
+    def test_full_call_sequence_gel_manicure_with_holy_survives_to_the_appointment_row(self):
+        """The tool calls the model makes for: 'I want a Gel Manicure with Holy tomorrow at 2 PM.'"""
+        env = self.env("CA-pt13")
+        services = env.tool("list_services")
+        gel = next(s for s in services if s["name"] == "Gel Manicure")
+        assert "Holy Nguyen" in env.tool("get_service_details", service_id=gel["id"])["technicians"]
+        slots = env.tool("get_available_slots", date=env.day.isoformat(), service_ids=[gel["id"]], technician_name="Holy")
+        two_pm = _at(slots, "14:00")
+        assert two_pm["technician"] == "Holy Nguyen"
+        summary = env.tool("create_booking", slot_id=two_pm["slot_id"], customer_name="Maria Lopez")
+        assert summary["status"] == "confirmation_required"
+        assert (summary["summary"]["service"], summary["summary"]["time"], summary["summary"]["technician"]) == ("Gel Manicure", "2:00 PM", "Holy Nguyen")
+        env.hear_caller()  # the caller says "yes, book it"
+        booked = env.tool("create_booking", slot_id=two_pm["slot_id"], customer_name="Maria Lopez", caller_confirmation="Yes, book it")
+        assert booked["status"] == "booked" and booked["technician"] == "Holy Nguyen"
+        verify = SessionLocal()
+        row = verify.query(models.Appointment).one()
+        assert row.technician_id == env.tech_ids[0] and row.preferred_technician_id == env.tech_ids[0]
+        assert row.appointment_time.hour == 14 and row.customer_name == "Maria Lopez"
+        assert [s.service_name_snapshot for s in row.appointment_services] == ["Gel Manicure"]
+        call = verify.get(models.VoiceCall, env.call.id)
+        assert call.appointment_id == row.id
+        verify.close(); env.close()
+
+
+class TestRejectedToolCallsAreTraceable:
+    def test_a_refused_tool_call_records_tool_and_argument_names_but_never_values(self):
+        import json
+        call_id, *_ = _voice_call("CA-rej1")
+        db = SessionLocal()
+        state = {"stopped": False, "stream_sid": "MZ", "db": db, "db_factory": SessionLocal, "call": db.get(models.VoiceCall, call_id), "config": VoiceConfig.from_env()}
+        args = json.dumps({"date": "2030-01-01", "service_ids": [999999], "technician_name": "Holly SECRETNAME"})
+        _run_openai(state, [{"type": "response.done", "response": {"output": [{"type": "function_call", "name": "get_available_slots", "arguments": args, "call_id": "x"}]}}])
+        event = db.query(models.VoiceCallEvent).filter(models.VoiceCallEvent.call_id == call_id, models.VoiceCallEvent.result_status == "rejected").one()
+        assert event.metadata_json == {"tool": "get_available_slots", "argument_names": ["date", "service_ids", "technician_name"]}
+        assert "SECRETNAME" not in str(event.metadata_json) and "999999" not in str(event.metadata_json)
+        db.close()
+
+
+class TestTechnicianNamesAreNotVolunteered:
+    def test_prompt_and_tool_text_say_technician_names_are_reference_data_only(self):
+        text = realtime_bridge.receptionist_instructions("Test Nails", "America/Phoenix")
+        assert "do NOT mention or ask about technicians at all" in text
+        assert "Never read out a list of technicians unprompted" in text
+        assert "reference data only" in text and "book with any available technician" in text
+        for trigger in ("asks for or names a technician", "asks who can do a service", "ambiguous", "unavailable and the caller wants alternatives", "actually do the appointment"):
+            assert trigger in text
+        definitions = {t["name"]: t["description"] for t in voice_tools.READ_ONLY_TOOL_DEFINITIONS}
+        assert "never recite it unprompted" in definitions["get_service_details"]
+        assert "technician" not in definitions["list_services"].lower()
+        # the earlier hard-constraint wording is unchanged
+        assert "hard requirement, never a preference" in text and "ONLY after the caller agrees" in text
+
+    def test_service_only_flow_needs_no_technician_choice_and_the_confirmation_names_the_real_one(self):
+        env = VoiceBookingEnv("CA-nv1", techs=("Holy Nguyen", "Andy Tran", "Ashly Bui"))
+        services = env.tool("list_services")
+        assert all("technicians" not in s for s in services)
+        gel = next(s for s in services if s["name"] == "Gel Manicure")
+        slots = env.tool("get_available_slots", date=env.day.isoformat(), service_ids=[gel["id"]])  # no technician_name at all
+        assert slots and all("technician" not in s for s in slots)
+        slot = _at(slots, "10:00")
+        prepared = env.tool("create_booking", slot_id=slot["slot_id"], customer_name="Maria Lopez")
+        assert prepared["summary"]["technician"] == "first available technician"
+        env.hear_caller()
+        booked = env.tool("create_booking", slot_id=slot["slot_id"], customer_name="Maria Lopez", caller_confirmation="yes please")
+        assert booked["technician"] in ("Holy Nguyen", "Andy Tran", "Ashly Bui")  # the final confirmation states who it really is
+        verify = SessionLocal()
+        row = verify.query(models.Appointment).one()
+        assert db_name(verify, row.technician_id) == booked["technician"]
+        verify.close(); env.close()
+
+    def test_who_can_do_it_is_still_answerable_and_a_named_technician_still_binds(self):
+        env = VoiceBookingEnv("CA-nv2", techs=("Holy Nguyen", "Andy Tran"))
+        details = env.tool("get_service_details", service_id=env.service_id)
+        assert details["technicians"] == ["Andy Tran", "Holy Nguyen"]
+        holy = env.tool("get_available_slots", date=env.day.isoformat(), service_ids=[env.service_id], technician_name="Holy")
+        assert holy and {s["technician"] for s in holy} == {"Holy Nguyen"}
+        anyone = env.tool("get_available_slots", date=env.day.isoformat(), service_ids=[env.service_id])
+        assert anyone and all("technician" not in s for s in anyone)
+        env.close()
+
+
+def db_name(db, technician_id):
+    return db.get(models.Technician, technician_id).full_name
+
+
+class TestTechnicianEditKeepsServiceEligibility:
+    def test_an_unrelated_technician_edit_does_not_rebuild_eligibility_from_specialties(self):
+        tech = make_tech("Elig Keep", specialties="manicure / pedicure, gel").json()["id"]
+        gel = _catalog()["Gel Manicure"]["id"]
+        assert tech in _catalog()["Gel Manicure"]["eligible_technician_ids"]
+        assert client.put(f"/booking-services/{gel}/technicians", json={"technician_ids": []}).status_code == 200  # owner removes it on the Services page
+        for change in ({"phone": "6025550100"}, {"notes": "keep"}, {"specialties": "manicure / pedicure, gel"}, {"availability": "available today"}):
+            assert client.put(f"/technicians/{tech}", json=change).status_code == 200, change
+            assert _catalog()["Gel Manicure"]["eligible_technician_ids"] == [], change  # the Services-page choice survives
+        # a REAL change of the specialties still recomputes eligibility from them
+        assert client.put(f"/technicians/{tech}", json={"specialties": "waxing"}).status_code == 200
+        assert tech not in _catalog()["Gel Manicure"]["eligible_technician_ids"]
+        assert client.put(f"/technicians/{tech}", json={"specialties": "manicure / pedicure, gel"}).status_code == 200
+        assert tech in _catalog()["Gel Manicure"]["eligible_technician_ids"]
+
+    def test_explicit_service_ids_on_a_technician_edit_still_win(self):
+        tech = make_tech("Elig Explicit", specialties="waxing").json()["id"]
+        gel = _catalog()["Gel Manicure"]["id"]
+        assert client.put(f"/technicians/{tech}", json={"service_ids": [gel]}).status_code == 200
+        assert tech in _catalog()["Gel Manicure"]["eligible_technician_ids"]
+
+

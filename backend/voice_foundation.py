@@ -2,7 +2,7 @@ import hashlib
 import re
 import secrets
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
@@ -257,6 +257,8 @@ class VoiceBookingFacade:
             "salon_name": settings.salon_name, "business_phone": settings.business_phone,
             "address": ", ".join(filter(None, [settings.address_line1, settings.address_line2, settings.city, settings.state, settings.postal_code])) or None,
             "timezone": settings.timezone,
+            "business_hours_note": ("These are the hours for scheduling appointments. They say nothing about walk-ins or "
+                                    "customers already in the salon; never promise service outside them."),
             "business_hours": [{"day": day_names[h.day_of_week], "closed": h.is_closed,
                                 "opens_at": h.opens_at.isoformat(timespec="minutes") if h.opens_at else None,
                                 "closes_at": h.closes_at.isoformat(timespec="minutes") if h.closes_at else None} for h in hours],
@@ -264,7 +266,8 @@ class VoiceBookingFacade:
 
     def list_services(self) -> list[dict]:
         import booking_service
-        return [self._public_service(s) for s in booking_service.get_active_services(self.db)]
+        # no technician names here: a long service list must never invite the model to read out staff
+        return [self._public_service(s, with_technicians=False) for s in booking_service.get_active_services(self.db)]
 
     def get_service_details(self, service_id: int) -> dict | None:
         service = self.db.query(models.BookingService).filter(
@@ -273,10 +276,18 @@ class VoiceBookingFacade:
         return self._public_service(service) if service else None
 
     @staticmethod
-    def _public_service(service: models.BookingService) -> dict:
-        return {"id": service.id, "name": service.name, "category": service.category,
+    def _public_service(service: models.BookingService, with_technicians: bool = True) -> dict:
+        data = {"id": service.id, "name": service.name, "category": service.category,
                 "description": service.description, "duration_minutes": service.duration_minutes,
-                "price": float(service.price) if service.price is not None else None}
+                "price": float(service.price) if service.price is not None else None,
+                }
+        if with_technicians:
+            # display names only (no ids, schedules, phones or notes), as REFERENCE for matching what the caller says
+            data["technicians"] = sorted(item.technician.full_name for item in service.technician_eligibilities
+                                         if item.technician is not None and item.technician.is_active)
+            data["technicians_note"] = ("Reference only. Do not read these names out unless the caller asks who performs "
+                                        "this service or asks for a specific technician.")
+        return data
 
     def get_available_slots(
         self, day: str, service_ids: list[int], technician_id: int | None = None, technician_name: str | None = None

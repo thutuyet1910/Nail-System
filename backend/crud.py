@@ -156,6 +156,27 @@ def create_technician(db: Session, technician: schemas.TechnicianCreate):
     return db_technician
 
 
+def rollover_technician_availability(db: Session, today: date | None = None) -> int:
+    """Technicians marked "unavailable today" (status unavailable + availability off today) become available
+    again on the next SALON day. Server side, so it never depends on anyone opening Owner Management, and
+    idempotent: running it twice changes nothing more. A row marked before this existed (no date) is stamped
+    with today and cleared tomorrow. Returns how many technicians were reset."""
+    today = today or salon_today()
+    rows = db.query(models.Technician).filter(
+        models.Technician.status == "unavailable", models.Technician.availability == "off today"
+    ).all()
+    reset, dirty = 0, False
+    for technician in rows:
+        if technician.unavailable_on is None:
+            technician.unavailable_on, dirty = today, True
+        elif technician.unavailable_on < today:
+            technician.status, technician.availability, technician.unavailable_on = "active", "available today", None
+            reset, dirty = reset + 1, True
+    if dirty:
+        db.commit()
+    return reset
+
+
 def get_technicians(
     db: Session,
     search: str | None = None,
@@ -164,6 +185,7 @@ def get_technicians(
     sort_by: str = "name",
     include_inactive: bool = False,
 ):
+    rollover_technician_availability(db)
     query = db.query(models.Technician)
 
     if not include_inactive:
@@ -202,12 +224,16 @@ def update_technician(db: Session, technician_id: int, payload: schemas.Technici
 
     update_data = payload.model_dump(exclude_unset=True)
     service_ids = update_data.pop("service_ids", None)
+    previous_specialties = db_technician.specialties
     _ensure_technician_is_unique(
         db, update_data.get("full_name"), update_data.get("employee_id"), exclude_id=technician_id
     )
 
     for key, value in update_data.items():
         setattr(db_technician, key, value)
+    if "status" in update_data or "availability" in update_data:
+        marked_unavailable_today = db_technician.status == "unavailable" and db_technician.availability == "off today"
+        db_technician.unavailable_on = salon_today() if marked_unavailable_today else None
 
     if "work_schedule" in update_data:
         sync_technician_schedule_from_legacy(db, db_technician)
@@ -223,7 +249,9 @@ def update_technician(db: Session, technician_id: int, payload: schemas.Technici
         db_technician.service_eligibilities = [
             models.TechnicianService(service_id=service_id) for service_id in service_ids
         ]
-    elif "specialties" in update_data:
+    elif "specialties" in update_data and update_data["specialties"] != previous_specialties:
+        # Only a real change of the specialties text recomputes eligibility. The technician form always sends
+        # the specialties, so rebuilding on every save would silently undo what was set on the Services page.
         sync_technician_eligibility_from_legacy(db, db_technician)
 
     db.commit()
@@ -338,6 +366,7 @@ def get_technician_cards(
     sort_by: str = "name",
     include_inactive: bool = False,
 ):
+    rollover_technician_availability(db)
     technicians = get_technicians(
         db,
         search=search,
@@ -394,47 +423,6 @@ def get_technician_cards(
 # ----------------------------
 # Appointments
 # ----------------------------
-def _generate_appointment_code(db: Session) -> str:
-    prefix = f"APT-{_now().strftime('%Y%m%d')}-"
-
-    last_today = (
-        db.query(models.Appointment)
-        .filter(models.Appointment.appointment_code.like(f"{prefix}%"))
-        .order_by(models.Appointment.id.desc())
-        .first()
-    )
-
-    next_number = 1
-    if last_today and last_today.appointment_code:
-        try:
-            next_number = int(last_today.appointment_code.split("-")[-1]) + 1
-        except ValueError:
-            pass
-
-    return f"{prefix}{next_number:03d}"
-
-
-def _validate_appointment(db: Session, payload: dict, exclude_id: int | None = None) -> None:
-    for key, label in (
-        ("technician_id", "Assigned technician"),
-        ("preferred_technician_id", "Preferred technician"),
-    ):
-        if payload.get(key):
-            technician = get_technician(db, payload[key])
-            if not technician:
-                raise BusinessRuleError(f"{label} not found")
-            if not technician.is_active:
-                raise BusinessRuleError(f"{label} has been deactivated")
-
-    code = payload.get("appointment_code")
-    if code:
-        query = db.query(models.Appointment).filter(models.Appointment.appointment_code == code)
-        if exclude_id:
-            query = query.filter(models.Appointment.id != exclude_id)
-        if query.first():
-            raise BusinessRuleError("Appointment code already exists")
-
-
 def create_appointment(db: Session, appointment: schemas.AppointmentCreate):
     """Compatibility wrapper; all appointment creation uses the booking domain."""
     return booking_service.create_booking(db, appointment)
@@ -781,6 +769,7 @@ def _choose_best_technician(
     5. Among those left -> fewest turns today
     6. Tie -> longest since last assigned, then name, then id (always one stable winner)
     """
+    rollover_technician_availability(db)
     # Steps 1-2
     technicians = (
         db.query(models.Technician)
@@ -968,6 +957,7 @@ def assign_turn_preferred(db: Session, payload: schemas.AssignPreferredTurnReque
         if existing_turn.status != "waiting":
             return existing_turn
 
+    rollover_technician_availability(db)
     technician = get_technician(db, payload.preferred_technician_id)
     if not technician:
         raise BusinessRuleError("Preferred technician not found")
