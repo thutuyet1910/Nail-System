@@ -46,6 +46,7 @@ from database import Base, SessionLocal, engine  # noqa: E402
 from main import app  # noqa: E402
 import main as main_module  # noqa: E402
 import auth_service  # noqa: E402
+import crud  # noqa: E402
 import notification_service  # noqa: E402
 import voice_foundation  # noqa: E402
 import realtime_bridge  # noqa: E402
@@ -92,6 +93,7 @@ def reset_db():
     db.commit()
     db.close()
     client.cookies.clear()
+    auth_service._attempts.clear()  # throttling tests must not leak attempts into later tests
     login = client.post("/auth/login", json={"password": "test-owner-password"})
     assert login.status_code == 200, login.text
     client.headers.update({"X-CSRF-Token": client.cookies.get("owner_csrf")})
@@ -4630,6 +4632,840 @@ class TestTechnicianNamesAreNotVolunteered:
 
 def db_name(db, technician_id):
     return db.get(models.Technician, technician_id).full_name
+
+
+class TestOwnerLogoutRevokesTheBackendSession:
+    def test_logout_with_csrf_revokes_the_session_and_replayed_cookies_fail(self):
+        owner = TestClient(app)
+        assert owner.post("/auth/login", json={"password": "test-owner-password"}).status_code == 200
+        csrf = owner.cookies.get("owner_csrf")
+        stolen = dict(owner.cookies)
+        assert owner.get("/booking-services").status_code == 200
+        assert owner.post("/auth/logout").status_code == 403  # CSRF is required
+        assert owner.get("/booking-services").status_code == 200
+        assert owner.post("/auth/logout", headers={"X-CSRF-Token": csrf}).status_code == 200
+        assert owner.get("/booking-services").status_code == 401
+        replay = TestClient(app)
+        for name, value in stolen.items():
+            replay.cookies.set(name, value)
+        assert replay.get("/booking-services").status_code == 401
+        assert replay.get("/appointments").status_code == 401
+        assert replay.post("/auth/logout", headers={"X-CSRF-Token": csrf}).status_code == 401
+        assert TestClient(app).post("/auth/login", json={"password": "test-owner-password"}).status_code == 200  # signing in again works
+
+
+# ── Staff (no owner password) versus Owner access ─────────────────────────────
+
+STAFF_ORIGIN = {"Origin": "http://127.0.0.1:5500"}
+
+
+def _staff():
+    """A browser that opened the dashboard and never entered the owner password."""
+    staff = TestClient(app)
+    response = staff.post("/auth/staff-session", headers=STAFF_ORIGIN)
+    assert response.status_code == 200 and response.json()["role"] == "staff"
+    staff.headers.update({"X-Staff-CSRF-Token": staff.cookies.get("staff_csrf")})
+    return staff
+
+
+class TestStaffAccessBoundary:
+    def test_a_staff_session_needs_an_allowed_origin_and_carries_no_owner_cookie(self):
+        anonymous = TestClient(app)
+        assert anonymous.post("/auth/staff-session").status_code == 403
+        assert anonymous.post("/auth/staff-session", headers={"Origin": "https://evil.example"}).status_code == 403
+        staff = _staff()
+        assert staff.cookies.get("staff_session") and not staff.cookies.get("owner_session")
+        assert staff.get("/auth/session").json() == {"authenticated": False, "expires_at": None}  # still not the owner
+
+    def test_staff_can_read_what_daily_operations_need_and_nothing_private(self):
+        make_tech("Staff View Tech", specialties="gel")
+        staff = _staff()
+        techs = staff.get("/technicians").json()
+        assert techs and all(set(t) <= {"id", "full_name", "skills", "specialties", "status", "availability", "is_active"} for t in techs)
+        for private in ("phone", "notes", "employee_id", "profile_photo", "work_schedule", "start_date"):
+            assert all(private not in t for t in techs)
+        assert staff.get("/appointments").status_code == 200
+        assert staff.get("/turns/today").status_code == 200
+        assert staff.get("/services").status_code == 200
+        assert staff.get("/checkouts").status_code == 200
+        assert staff.get("/availability?date=2030-01-07&service_ids=1").status_code == 200
+        # the owner still receives the full technician record
+        assert "phone" in client.get("/technicians").json()[0]
+
+    def test_staff_can_make_and_manage_appointments_without_the_owner_password(self):
+        tech = make_tech("Appt Staff Tech", specialties="manicure / pedicure, gel").json()["id"]
+        service = _catalog()["Gel Manicure"]["id"]
+        staff = _staff()
+        day = _booking_day(2)
+        _set_business_hours(day, time(9, 0), time(18, 0))
+        payload = _booking_payload(tech, datetime.combine(day, time(10, 0)), [service], customer_name="Walk Up")
+        no_csrf = TestClient(app)
+        no_csrf.cookies.update(staff.cookies)
+        assert no_csrf.post("/appointments", json=payload).status_code == 403, "a staff write needs the staff CSRF header"
+        created = staff.post("/appointments", json=payload)
+        assert created.status_code == 200, created.text
+        appointment_id = created.json()["id"]
+        assert staff.get(f"/appointments/{appointment_id}").status_code == 200
+        later = datetime.combine(day, time(11, 0)).isoformat()
+        assert staff.post(f"/appointments/{appointment_id}/reschedule", json={"appointment_time": later, "service_ids": [service], "technician_id": tech}).status_code == 200
+        assert staff.post(f"/appointments/{appointment_id}/cancel", json={"reason": "customer called"}).status_code == 200
+
+    def test_staff_can_run_the_queue_and_complete_a_checkout_with_a_reduced_receipt(self):
+        tech = make_tech("Checkout Tech", specialties="manicure / pedicure, gel").json()["id"]
+        staff = _staff()
+        turn = staff.post("/turns/assign-auto", json={"customer_name": "Cara", "service_name": "Gel Manicure"})
+        assert turn.status_code == 200, turn.text
+        turn_id = turn.json()["id"]
+        assert staff.put(f"/turns/{turn_id}/start", json={}).status_code == 200
+        assert staff.put(f"/turns/{turn_id}/status", json={"status": "done"}).status_code in (200, 400)
+        paid = staff.post("/checkouts", json={"customer_name": "Cara", "service_name": "Gel Manicure", "subtotal": 80, "tip_amount": 10,
+                                              "discount_type": "none", "discount_value": 0, "payment_method": "cash",
+                                              "technician_id": tech, "turn_id": turn_id})
+        assert paid.status_code == 200, paid.text
+        receipt = paid.json()
+        assert receipt["customer_pays"] == 90 and receipt["technician_id"] == tech and receipt["turn_id"] == turn_id
+        for hidden in ("salon_share", "salon_actual_revenue", "technician_share", "technician_total", "net_service"):
+            assert hidden not in receipt
+        today = staff.get("/checkouts").json()
+        assert [c["id"] for c in today] == [receipt["id"]] and all("salon_share" not in c for c in today)
+        assert client.get("/checkouts").json()[0]["salon_share"] is not None  # the owner still gets the full record
+        assert get_turn_today(turn_id)["id"] == turn_id
+
+    def test_staff_only_see_todays_checkouts_never_history(self):
+        make_tech("History Tech", specialties="gel")
+        old = make_checkout(customer_name="Old Sale").json()
+        db = SessionLocal()
+        row = db.get(models.Checkout, old["id"])
+        row.created_at = row.created_at - timedelta(days=30)
+        db.commit(); db.close()
+        fresh = make_checkout(customer_name="Today Sale").json()
+        assert {c["customer_name"] for c in client.get("/checkouts").json()} == {"Old Sale", "Today Sale"}
+        assert [c["id"] for c in _staff().get("/checkouts").json()] == [fresh["id"]]
+
+    def test_staff_cannot_reach_any_owner_only_endpoint(self):
+        tech = make_tech("Owner Only Tech", specialties="gel").json()["id"]
+        staff = _staff()
+        blocked = [
+            ("get", "/income/tech?date=2030-01-01"), ("get", "/income/salon?date=2030-01-01"),
+            ("get", "/inventory"), ("get", "/inventory/summary"), ("post", "/inventory"), ("put", "/inventory/1"), ("delete", "/inventory/1"),
+            ("get", "/booking-services"), ("post", "/booking-services"), ("patch", "/booking-services/1"), ("put", "/booking-services/1/technicians"),
+            ("get", "/notifications"), ("get", "/notifications/unread-count"), ("post", "/notifications/read-all"), ("post", "/notifications/1/read"),
+            ("post", "/callbacks"), ("post", "/technicians"), (f"put", f"/technicians/{tech}"), ("delete", f"/technicians/{tech}"),
+            ("put", f"/technicians/{tech}/deactivate"), ("put", f"/technicians/{tech}/reactivate"), ("get", f"/technicians/{tech}"),
+            ("get", "/technicians/cards"), ("post", f"/technicians/{tech}/blocked-times"),
+            ("delete", "/appointments/1"), ("delete", "/checkouts/1"), ("get", "/checkouts/1"), ("get", "/turns"), ("post", "/turns"),
+            ("post", "/does-not-exist-yet"), ("get", "/internal/services"),
+        ]
+        for method, path in blocked:
+            response = getattr(staff, method)(path, **({"json": {}} if method in ("post", "put", "patch") else {}))
+            assert response.status_code in (401, 403), (method, path, response.status_code)
+        # and nothing was changed
+        assert client.get("/technicians").json()[0]["is_active"] is True
+
+    def test_owner_only_routes_answer_401_without_any_session_and_403_for_staff(self):
+        anonymous = TestClient(app)
+        assert anonymous.get("/income/salon?date=2030-01-01").status_code == 401
+        assert anonymous.get("/technicians").status_code == 401 and anonymous.get("/appointments").status_code == 401
+        staff = _staff()
+        denied = staff.get("/income/salon?date=2030-01-01")
+        assert denied.status_code == 403 and denied.json() == {"detail": "Owner access required"}
+
+    def test_csrf_tokens_do_not_cross_between_staff_and_owner(self):
+        staff = _staff()
+        owner_csrf = client.cookies.get("owner_csrf")
+        both = TestClient(app)
+        both.cookies.update(staff.cookies)
+        assert both.post("/auth/login", json={"password": "test-owner-password"}).status_code == 200
+        owner_header = {"X-CSRF-Token": both.cookies.get("owner_csrf")}
+        staff_header = {"X-Staff-CSRF-Token": both.cookies.get("staff_csrf")}
+        assert both.post("/booking-services", json={"name": "Cross Csrf", "duration_minutes": 30}, headers=staff_header).status_code == 403
+        assert both.post("/booking-services", json={"name": "Cross Csrf", "duration_minutes": 30}, headers=owner_header).status_code == 201
+        assert owner_csrf and TestClient(app).post("/booking-services", json={"name": "No", "duration_minutes": 30}, headers={"X-CSRF-Token": owner_csrf}).status_code == 401
+
+    def test_owner_logout_revokes_owner_privilege_but_staff_work_continues(self):
+        browser = TestClient(app)
+        assert browser.post("/auth/staff-session", headers=STAFF_ORIGIN).status_code == 200
+        assert browser.post("/auth/login", json={"password": "test-owner-password"}).status_code == 200
+        headers = {"X-CSRF-Token": browser.cookies.get("owner_csrf"), "X-Staff-CSRF-Token": browser.cookies.get("staff_csrf")}
+        assert browser.get("/inventory").status_code == 200
+        assert browser.post("/auth/logout", headers=headers).status_code == 200
+        assert browser.get("/inventory").status_code == 403, "owner data is gone (still a valid staff session)"
+        assert browser.get("/income/salon?date=2030-01-01").status_code == 403
+        assert browser.get("/appointments").status_code == 200 and browser.get("/turns/today").status_code == 200
+        tech = make_tech("After Logout Tech", specialties="manicure / pedicure, gel").json()["id"]
+        paid = browser.post("/checkouts", json={"customer_name": "Dee", "service_name": "Gel Manicure", "subtotal": 50, "tip_amount": 0,
+                                                "discount_type": "none", "discount_value": 0, "payment_method": "cash", "technician_id": tech}, headers=headers)
+        assert paid.status_code == 200, paid.text
+
+    def test_wrong_password_never_grants_owner_and_staff_access_stays_staff(self):
+        browser = TestClient(app)
+        browser.post("/auth/staff-session", headers=STAFF_ORIGIN)
+        assert browser.post("/auth/login", json={"password": "wrong"}).status_code == 401
+        assert browser.get("/inventory").status_code == 403
+        assert browser.get("/appointments").status_code == 200
+
+    def test_staff_sessions_expire_and_are_rejected_after_a_server_restart(self):
+        staff = _staff()
+        assert staff.get("/appointments").status_code == 200
+        auth_service._staff_sessions.clear()  # what a restart does
+        assert staff.get("/appointments").status_code == 401
+        assert staff.get("/appointments").json()["detail"] == "Staff session required"
+
+    def test_voice_and_internal_boundaries_and_the_six_plus_one_tools_are_untouched(self):
+        assert {t["name"] for t in voice_tools.READ_ONLY_TOOL_DEFINITIONS} == {
+            "get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback", "create_booking"}
+        assert TestClient(app).get("/internal/services", headers={"X-Internal-Service-Token": "test-internal-token"}).status_code == 200
+        assert _staff().get("/internal/services").status_code == 401
+
+
+# ── Salon hours: the 2026-10-12 16:00 Acrylic Fill + Full Set case ────────────
+
+class TestBookingHoursAndDurationReasons:
+    MONDAY = date(2026, 10, 12)
+
+    def setup_day(self, monkeypatch, opens=time(9, 0), closes=time(18, 0)):
+        _salon_now_is(monkeypatch, datetime(2026, 10, 1, 8, 0))
+        assert self.MONDAY.weekday() == 0  # 2026-10-12 is a Monday
+        _set_business_hours(self.MONDAY, opens, closes)
+        catalog = _catalog()
+        ids = [catalog["Acrylic Fill"]["id"], catalog["Acrylic Full Set"]["id"]]
+        total = catalog["Acrylic Fill"]["duration_minutes"] + catalog["Acrylic Full Set"]["duration_minutes"]
+        andy = make_tech("Andy", specialties="acrylic, gel").json()["id"]
+        _set_tech_schedule(andy, self.MONDAY, time(0, 0), time(23, 59))
+        return ids, total, andy
+
+    def book(self, andy, ids, hhmm, who="Maria", prefer=True, **extra):
+        hour, minute = map(int, hhmm.split(":"))
+        payload = _booking_payload(None if prefer else andy, datetime.combine(self.MONDAY, time(hour, minute)), ids, customer_name=who, **extra)
+        if prefer:
+            payload["preferred_technician_id"] = andy
+        return client.post("/appointments", json=payload)
+
+    def test_the_exact_live_case_is_rejected_because_the_services_run_past_closing_and_says_so(self, monkeypatch):
+        ids, total, andy = self.setup_day(monkeypatch)
+        assert total == 150  # Acrylic Fill 60 + Acrylic Full Set 90, no buffers
+        response = self.book(andy, ids, "16:00", who="v11")
+        assert response.status_code == 400
+        message = response.json()["detail"]
+        assert "outside salon business hours" not in message
+        assert "2 hr 30 min" in message and "run past closing time (6:00 PM)" in message
+        assert "latest start for them is 3:30 PM" in message and "choose an earlier appointment" in message
+        assert client.get("/appointments").json() == []
+
+    def test_the_four_pm_start_itself_is_valid_for_a_short_service_and_the_latest_start_is_exact(self, monkeypatch):
+        ids, total, andy = self.setup_day(monkeypatch)
+        short = _configure_service("Acrylic Fill", duration=60)
+        assert self.book(andy, [short], "16:00", who="Short").status_code == 200  # 16:00-17:00 fits
+        other = make_tech("Boundary Tech", specialties="acrylic").json()["id"]
+        _set_tech_schedule(other, self.MONDAY, time(0, 0), time(23, 59))
+        assert self.book(other, ids, "15:30", who="Latest").status_code == 200, "ends exactly at closing: allowed"
+        too_late = self.book(other, ids, "15:45", who="TooLate")
+        assert too_late.status_code == 400 and "latest start for them is 3:30 PM" in too_late.json()["detail"]
+
+    def test_opening_boundary_before_opening_and_after_closing_each_get_their_own_reason(self, monkeypatch):
+        ids, total, andy = self.setup_day(monkeypatch)
+        short = _configure_service("Acrylic Fill", duration=60)
+        assert self.book(andy, [short], "09:00", who="OnTheMinute").status_code == 200
+        early = self.book(andy, [short], "08:45", who="Early")
+        assert early.status_code == 400 and "opens at 9:00 AM on Mondays" in early.json()["detail"]
+        for late in ("18:00", "19:30"):
+            response = self.book(andy, [short], late, who="Late" + late)
+            assert response.status_code == 400 and "closes at 6:00 PM on Mondays" in response.json()["detail"], late
+        assert "outside salon business hours" not in early.text
+
+    def test_a_closed_day_and_services_longer_than_the_whole_day_are_explained(self, monkeypatch):
+        ids, total, andy = self.setup_day(monkeypatch)
+        _set_business_hours(self.MONDAY, closed=True)
+        closed = self.book(andy, ids, "10:00")
+        assert closed.status_code == 400 and "closed on Mondays" in closed.json()["detail"]
+        _set_business_hours(self.MONDAY, time(9, 0), time(10, 0))
+        long_day = self.book(andy, ids, "09:00")
+        assert long_day.status_code == 400 and "longer than the salon's open hours" in long_day.json()["detail"]
+
+    def test_phoenix_time_is_used_whatever_form_the_browser_sends(self, monkeypatch):
+        _salon_now_is(monkeypatch, datetime(2026, 10, 1, 8, 0))
+        _set_business_hours(self.MONDAY, time(9, 0), time(18, 0))
+        service = _configure_service("Acrylic Fill", duration=60)
+        techs = [make_tech(f"Tz Tech {i}", specialties="acrylic").json()["id"] for i in range(3)]
+        for tech in techs:
+            _set_tech_schedule(tech, self.MONDAY, time(0, 0), time(23, 59))
+        for tech, sent in zip(techs, ("2026-10-12T16:00", "2026-10-12T16:00:00-07:00", "2026-10-12T23:00:00Z")):
+            payload = _booking_payload(tech, datetime(2026, 10, 12, 16, 0), [service], customer_name=f"Tz {sent[-6:]}")
+            payload["appointment_time"] = sent
+            created = client.post("/appointments", json=payload)
+            assert created.status_code == 200, (sent, created.text)
+            assert created.json()["appointment_time"].startswith("2026-10-12T16:00"), sent
+        db = SessionLocal()
+        assert {row.starts_at_utc for row in db.query(models.Appointment)} == {datetime(2026, 10, 12, 23, 0)}  # 16:00 Phoenix = 23:00Z
+        db.close()
+
+    def test_a_technician_schedule_conflict_is_reported_as_a_technician_problem_not_a_salon_hours_problem(self, monkeypatch):
+        ids, total, andy = self.setup_day(monkeypatch)
+        short = _configure_service("Acrylic Fill", duration=60)
+        _set_tech_schedule(andy, self.MONDAY, time(9, 0), time(16, 30))
+        response = self.book(andy, [short], "16:00")  # inside salon hours, but Andy leaves at 16:30
+        assert response.status_code == 400
+        assert "technician" in response.json()["detail"].lower() and "business hours" not in response.json()["detail"]
+        assert self.book(andy, [short], "15:00", who="Fits").status_code == 200
+
+    def test_preferred_technician_andy_is_booked_when_the_slot_is_valid(self, monkeypatch):
+        ids, total, andy = self.setup_day(monkeypatch)
+        booked = self.book(andy, ids, "15:30", who="v11")
+        assert booked.status_code == 200
+        assert booked.json()["technician_id"] == andy and booked.json()["preferred_technician_id"] == andy
+        assert booked.json()["duration_minutes"] == 150
+
+    def test_staff_without_the_owner_password_get_the_same_rules_and_messages(self, monkeypatch):
+        ids, total, andy = self.setup_day(monkeypatch)
+        staff = _staff()
+        base = _booking_payload(None, datetime.combine(self.MONDAY, time(16, 0)), ids, customer_name="v11")
+        base["preferred_technician_id"] = andy
+        rejected = staff.post("/appointments", json=base)
+        assert rejected.status_code == 400 and "run past closing time" in rejected.json()["detail"]
+        ok = {**base, "appointment_time": datetime.combine(self.MONDAY, time(15, 30)).isoformat()}
+        assert staff.post("/appointments", json=ok).status_code == 200
+        hours = staff.get("/business-hours")
+        assert hours.status_code == 200 and {h["day_of_week"] for h in hours.json()} == set(range(7))
+
+    def test_voice_booking_offers_only_starts_that_finish_inside_the_same_hours(self, monkeypatch):
+        _salon_now_is(monkeypatch, datetime(2026, 10, 1, 8, 0))
+        _configure_service("Gel Manicure", duration=150)
+        env = VoiceBookingEnv("CA-hrs1")
+        env.day = self.MONDAY
+        _set_business_hours(self.MONDAY, time(9, 0), time(18, 0))
+        for tech_id in env.tech_ids:
+            _set_tech_schedule(tech_id, self.MONDAY, time(0, 0), time(23, 59))
+        slots = env.tool("get_available_slots", date=self.MONDAY.isoformat(), service_ids=[env.service_id])
+        starts = [s["start"][11:16] for s in slots]
+        assert starts[0] == "09:00" and starts[-1] == "15:30", starts
+        assert "16:00" not in starts and all(s["total_duration_minutes"] == 150 for s in slots)
+        latest = next(s for s in slots if s["start"][11:16] == "15:30")
+        assert env.tool("create_booking", slot_id=latest["slot_id"], customer_name="Maria Lopez")["status"] == "confirmation_required"
+        env.close()
+
+    def test_the_backend_exposes_the_same_hours_the_calendar_uses(self, monkeypatch):
+        _set_business_hours(self.MONDAY, time(9, 0), time(18, 0))
+        monday = next(h for h in client.get("/business-hours").json() if h["day_of_week"] == 0)
+        assert (monday["is_closed"], monday["opens_at"][:5], monday["closes_at"][:5]) == (False, "09:00", "18:00")
+
+
+# ── Booking hours schedule NEW appointments; they never shut the salon down ───
+
+def _close_the_salon_everywhere():
+    """Every weekday closed: nothing can be booked, the salon is 'after hours' all day."""
+    db = SessionLocal()
+    for row in db.query(models.BusinessHour):
+        row.is_closed, row.opens_at, row.closes_at = True, None, None
+    db.commit()
+    db.close()
+
+
+class TestBookingHoursAreNotAShutdown:
+    def test_after_hours_staff_still_serve_check_out_and_manage_existing_customers(self):
+        tech = make_tech("Late Tech", specialties="manicure / pedicure, gel").json()["id"]
+        booked = make_appointment(customer_name="Already Booked", customer_phone="6025551234", technician_id=tech).json()
+        _close_the_salon_everywhere()
+        staff = _staff()
+        # viewing everything that exists
+        assert booked["id"] in [a["id"] for a in staff.get("/appointments").json()]
+        assert staff.get("/turns/today").status_code == 200 and staff.get("/technicians").status_code == 200
+        # the appointment's customer arrives (late) and is served and checked out
+        assert staff.post(f"/appointments/{booked['id']}/check-in").status_code == 200
+        turn = staff.post("/turns/assign-auto", json={"customer_name": "Already Booked", "customer_phone": "6025551234", "service_name": "Gel Manicure", "appointment_id": booked["id"]})
+        assert turn.status_code == 200, turn.text
+        turn_id = turn.json()["id"]
+        assert staff.put(f"/turns/{turn_id}/start", json={}).status_code == 200
+        paid = staff.post("/checkouts", json={"customer_name": "Already Booked", "service_name": "Gel Manicure", "subtotal": 60, "tip_amount": 5,
+                                              "discount_type": "none", "discount_value": 0, "payment_method": "cash", "technician_id": tech, "turn_id": turn_id, "appointment_id": booked["id"]})
+        assert paid.status_code == 200 and paid.json()["customer_pays"] == 65
+        # a walk-in who is in the salon is also served and can be cancelled/managed
+        walk_in = staff.post("/turns/assign-auto", json={"customer_name": "Walk In", "service_name": "Gel Manicure"})
+        assert walk_in.status_code in (200, 400)  # 400 only if every technician is busy: never an hours rule
+        if walk_in.status_code == 400:
+            assert "hours" not in walk_in.json()["detail"].lower() and "closed" not in walk_in.json()["detail"].lower()
+        # the owner session can do the same (nothing is tied to owner mode either)
+        assert client.get("/turns/today").status_code == 200
+
+    def test_check_in_matching_ignores_booking_hours(self):
+        tech = make_tech("Match Tech", specialties="manicure / pedicure, gel").json()["id"]
+        appointment = make_appointment(customer_phone="6025551234", technician_id=tech).json()
+        _close_the_salon_everywhere()
+        with _checkins_from(_checkin_item(visit_id=77, phone="6025551234")):
+            item = _staff().get("/checkins/today").json()["checkins"][0]
+        assert item["appointment_match"]["outcome"] == "exact_match"
+        assert item["appointment_match"]["appointment"]["id"] == appointment["id"]
+
+    def test_but_new_appointments_are_refused_manually_and_never_offered_by_the_ai(self, monkeypatch):
+        env = VoiceBookingEnv("CA-sem1")
+        _close_the_salon_everywhere()
+        assert env.tool("get_available_slots", date=env.day.isoformat(), service_ids=[env.service_id]) == []
+        refused = _staff().post("/appointments", json=_booking_payload(env.tech_ids[0], datetime.combine(env.day, time(14, 0)), [env.service_id]))
+        assert refused.status_code == 400 and "closed" in refused.json()["detail"]
+        env.close()
+
+    def test_changing_the_weekly_hours_changes_manual_booking_ai_availability_and_the_calendar_feed(self, monkeypatch):
+        monday = date(2026, 10, 12)
+        _salon_now_is(monkeypatch, datetime(2026, 10, 1, 8, 0))
+        _configure_service("Acrylic Fill", duration=60)
+        fill = _catalog()["Acrylic Fill"]["id"]
+        tech = make_tech("Hours Tech", specialties="acrylic").json()["id"]
+        _set_tech_schedule(tech, monday, time(0, 0), time(23, 59))
+        env = VoiceBookingEnv("CA-sem2")
+        env.day = monday
+        for tech_id in env.tech_ids:
+            _set_tech_schedule(tech_id, monday, time(0, 0), time(23, 59))
+
+        def manual(hhmm, who):
+            hour, minute = map(int, hhmm.split(":"))
+            return client.post("/appointments", json=_booking_payload(tech, datetime.combine(monday, time(hour, minute)), [fill], customer_name=who))
+
+        def ai_starts():
+            slots = env.tool("get_available_slots", date=monday.isoformat(), service_ids=[fill])
+            return [s["start"][11:16] for s in slots]
+
+        _set_business_hours(monday, time(9, 0), time(18, 0))  # the owner's configuration: 9-6
+        assert ai_starts()[0] == "09:00" and ai_starts()[-1] == "17:00"
+        assert manual("18:30", "TooLate").status_code == 400
+        _set_business_hours(monday, time(10, 0), time(19, 0))  # changed to 10-7: no code changes anywhere
+        assert ai_starts()[0] == "10:00" and ai_starts()[-1] == "18:00"
+        assert manual("09:30", "TooEarly").status_code == 400
+        assert "opens at 10:00 AM" in manual("09:30", "TooEarly2").json()["detail"]
+        assert manual("18:00", "NowFine").status_code == 200  # ends at 19:00 = the new closing time
+        feed = next(h for h in client.get("/business-hours").json() if h["day_of_week"] == 0)
+        assert (feed["opens_at"][:5], feed["closes_at"][:5]) == ("10:00", "19:00")
+        info = env.tool("get_salon_info")
+        listed = next(h for h in info["business_hours"] if h["day"] == "Monday")
+        assert (listed["opens_at"], listed["closes_at"]) == ("10:00", "19:00")
+        assert "scheduling appointments" in info["business_hours_note"] and "walk-ins" in info["business_hours_note"]
+        env.close()
+
+    def test_no_hours_are_hard_coded_in_the_voice_layer_or_the_booking_rules(self):
+        import re as _re
+        clock = _re.compile(r"\b\d{1,2}:\d{2}\s?(?:AM|PM|am|pm)?\b")
+        prompt = realtime_bridge.receptionist_instructions("Test Nails", "America/Phoenix")
+        assert not clock.search(prompt), "the prompt must not state any opening or closing time"
+        for module in ("voice_tools.py", "voice_booking.py", "realtime_bridge.py", "customer_gateway.py", "checkin_service.py"):
+            source = open(os.path.join(os.path.dirname(__file__), module), encoding="utf-8").read()
+            code = "\n".join(line for line in source.splitlines() if not line.strip().startswith("#"))
+            assert not _re.search(r"\b\d{1,2}:00\b", code), module + " must not contain a literal opening/closing time"
+        source = open(os.path.join(os.path.dirname(__file__), "booking_service.py"), encoding="utf-8").read()
+        assert "time(9" not in source and "time(18" not in source and "closes_at = time(" not in source
+
+    def test_the_receptionist_is_told_what_the_hours_mean(self):
+        prompt = realtime_bridge.receptionist_instructions("Test Nails", "America/Phoenix")
+        assert "hours for SCHEDULING appointments" in prompt
+        assert "never a time before opening or one whose services would finish after closing" in prompt
+        assert "never promise an after-hours appointment" in prompt
+        assert "walk-ins or customers who are already in the salon" in prompt
+        assert {t["name"] for t in voice_tools.READ_ONLY_TOOL_DEFINITIONS} == {
+            "get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback", "create_booking"}
+
+
+# ── Owner-only Salon Settings ─────────────────────────────────────────────────
+
+def _week(**overrides):
+    """A complete 7-day payload: Mon-Sat 09:00-18:00, Sunday closed; overrides are {weekday: dict}."""
+    days = [{"day_of_week": d, "is_closed": d == 6, "opens_at": None if d == 6 else "09:00", "closes_at": None if d == 6 else "18:00"} for d in range(7)]
+    for key, change in overrides.items():
+        days[int(key.lstrip("d"))].update(change)
+    return {"days": days}
+
+
+def _hours_now():
+    return {h["day_of_week"]: (h["is_closed"], h["opens_at"] and h["opens_at"][:5], h["closes_at"] and h["closes_at"][:5]) for h in client.get("/business-hours").json()}
+
+
+class TestBookingHoursSettings:
+    MONDAY = date(2026, 10, 12)
+
+    def test_owner_reads_the_whole_week_and_staff_can_read_but_never_change_it(self):
+        assert sorted(_hours_now()) == list(range(7))
+        staff = _staff()
+        assert staff.get("/business-hours").status_code == 200
+        before = _hours_now()
+        assert staff.put("/business-hours", json=_week()).status_code == 403
+        assert TestClient(app).put("/business-hours", json=_week()).status_code == 401
+        assert _hours_now() == before
+
+    def test_owner_changes_monday_and_every_consumer_follows_immediately(self, monkeypatch):
+        _salon_now_is(monkeypatch, datetime(2026, 10, 1, 8, 0))
+        _configure_service("Acrylic Fill", duration=60)
+        fill = _catalog()["Acrylic Fill"]["id"]
+        tech = make_tech("Settings Tech", specialties="acrylic").json()["id"]
+        _set_tech_schedule(tech, self.MONDAY, time(0, 0), time(23, 59))
+        env = VoiceBookingEnv("CA-set1")
+        env.day = self.MONDAY
+        for tech_id in env.tech_ids:
+            _set_tech_schedule(tech_id, self.MONDAY, time(0, 0), time(23, 59))
+        assert client.put("/business-hours", json=_week()).status_code == 200
+        assert _hours_now()[0] == (False, "09:00", "18:00")
+        slots = lambda: [s["start"][11:16] for s in env.tool("get_available_slots", date=self.MONDAY.isoformat(), service_ids=[fill])]
+        book = lambda hhmm, who: client.post("/appointments", json=_booking_payload(tech, datetime.combine(self.MONDAY, time(*map(int, hhmm.split(":")))), [fill], customer_name=who))
+        assert slots()[0] == "09:00" and slots()[-1] == "17:00" and book("18:30", "Late").status_code == 400
+        saved = client.put("/business-hours", json=_week(d0={"opens_at": "10:00", "closes_at": "19:00"}))  # 9-6 -> 10-7
+        assert saved.status_code == 200 and saved.json()[0]["opens_at"][:5] == "10:00"
+        assert _hours_now()[0] == (False, "10:00", "19:00")                      # the calendar's feed
+        assert slots()[0] == "10:00" and slots()[-1] == "18:00"                  # AI availability, no restart
+        assert book("09:30", "Early").status_code == 400                          # manual booking
+        assert book("18:00", "NowOk").status_code == 200
+        listed = next(h for h in env.tool("get_salon_info")["business_hours"] if h["day"] == "Monday")
+        assert (listed["opens_at"], listed["closes_at"]) == ("10:00", "19:00")   # get_salon_info
+        env.close()
+
+    @pytest.mark.parametrize("change", [
+        {"d0": {"opens_at": "18:00", "closes_at": "09:00"}},      # overnight / reversed
+        {"d0": {"opens_at": "09:00", "closes_at": "09:00"}},      # empty
+        {"d0": {"opens_at": None}},                                # open day without an opening time
+        {"d0": {"closes_at": None}},
+        {"d0": {"opens_at": "25:00"}},                             # malformed
+        {"d0": {"opens_at": "nine"}},
+        {"d0": {"opens_at": "09:00:30"}},                          # seconds
+        {"d0": {"unknown": 1}},                                    # unknown field
+        {"d0": {"day_of_week": 9}},
+    ])
+    def test_invalid_schedules_are_rejected_and_the_week_is_untouched(self, change):
+        before = _hours_now()
+        response = client.put("/business-hours", json=_week(**change))
+        assert response.status_code in (400, 422), response.text
+        assert _hours_now() == before
+
+    def test_payload_shape_is_enforced(self):
+        before = _hours_now()
+        good = _week()["days"]
+        for bad in ({"days": good[:6]}, {"days": good + [good[0]]}, {"days": [good[0]] * 7}, {"days": good, "timezone": "UTC"}, {}, {"days": "monday"}):
+            assert client.put("/business-hours", json=bad).status_code == 422, bad
+        assert _hours_now() == before
+
+    def test_an_invalid_day_in_the_middle_leaves_the_whole_week_unchanged_atomic(self):
+        before = _hours_now()
+        payload = _week(d0={"opens_at": "10:00", "closes_at": "19:00"}, d4={"opens_at": "09:10"})  # d4 is off the 15-minute grid
+        response = client.put("/business-hours", json=payload)
+        assert response.status_code == 400 and "15-minute boundary" in response.json()["detail"]
+        assert _hours_now() == before, "Monday must not have been half-updated"
+
+    def test_a_closed_day_carries_no_times_and_can_be_reopened(self):
+        response = client.put("/business-hours", json=_week(d2={"is_closed": True, "opens_at": "09:00", "closes_at": "18:00"}))
+        assert response.status_code == 200
+        assert _hours_now()[2] == (True, None, None) and _hours_now()[6] == (True, None, None)
+        assert client.put("/business-hours", json=_week()).status_code == 200
+        assert _hours_now()[2] == (False, "09:00", "18:00")
+
+    def test_existing_appointments_stay_visible_when_hours_shrink_but_new_late_ones_are_refused(self, monkeypatch):
+        _salon_now_is(monkeypatch, datetime(2026, 10, 1, 8, 0))
+        client.put("/business-hours", json=_week(d0={"opens_at": "09:00", "closes_at": "19:00"}))
+        service = _configure_service("Acrylic Fill", duration=60)
+        tech = make_tech("Shrink Tech", specialties="acrylic").json()["id"]
+        _set_tech_schedule(tech, self.MONDAY, time(0, 0), time(23, 59))
+        late = client.post("/appointments", json=_booking_payload(tech, datetime.combine(self.MONDAY, time(18, 0)), [service], customer_name="Six Oclock"))
+        assert late.status_code == 200
+        assert client.put("/business-hours", json=_week()).status_code == 200  # Monday now closes at 18:00
+        for who in (client, _staff()):
+            visible = [a for a in who.get("/appointments").json() if a["id"] == late.json()["id"]]
+            assert visible and visible[0]["appointment_time"].startswith("2026-10-12T18:00") and visible[0]["status"] == "scheduled"
+        refused = client.post("/appointments", json=_booking_payload(tech, datetime.combine(self.MONDAY, time(18, 0)), [service], customer_name="New Late", customer_phone="5559998888"))
+        assert refused.status_code == 400 and ("closes at 6:00 PM" in refused.json()["detail"] or "past closing" in refused.json()["detail"])
+
+
+class TestSalonProfileSettings:
+    def test_owner_updates_name_and_phone_and_they_reach_the_public_and_ai_views(self):
+        saved = client.put("/settings/salon", json={"salon_name": "  Lotus Nails  ", "business_phone": "(224) 549-2806"})
+        assert saved.status_code == 200
+        assert saved.json()["salon_name"] == "Lotus Nails" and saved.json()["business_phone"] == "+12245492806"
+        assert saved.json()["business_phone_display"] == "(224) 549-2806"
+        public = TestClient(app).get("/salon").json()
+        assert public["salon_name"] == "Lotus Nails" and public["business_phone"] == "+12245492806"
+        db = SessionLocal()
+        call = voice_foundation.create_call(db, caller_phone="6025551234", called_phone="6025559999", call_id="voice-prof")
+        facade = voice_foundation.VoiceBookingFacade(db, voice_foundation.VoiceAuthorizationContext(call.id, call.call_id, 0, call.caller_phone_e164, None))
+        info = facade.get_salon_info()
+        assert info["salon_name"] == "Lotus Nails" and info["business_phone"] == "+12245492806"
+        db.close()
+        assert client.put("/settings/salon", json={"salon_name": "Lotus Nails", "business_phone": ""}).json()["business_phone"] is None
+
+    @pytest.mark.parametrize("payload", [
+        {"salon_name": "", "business_phone": None}, {"salon_name": "   ", "business_phone": None}, {"salon_name": "x" * 81},
+        {"salon_name": "Ok", "business_phone": "12"}, {"salon_name": "Ok", "business_phone": "not a phone"},
+        {"salon_name": "Ok", "timezone": "UTC"}, {"salon_name": "Ok", "unknown": 1}, {},
+    ])
+    def test_invalid_profiles_are_rejected_and_nothing_changes(self, payload):
+        before = client.get("/settings/salon").json()
+        assert client.put("/settings/salon", json=payload).status_code in (400, 422)
+        assert client.get("/settings/salon").json() == before
+
+    def test_the_timezone_is_shown_but_read_only(self):
+        profile = client.get("/settings/salon").json()
+        assert profile["timezone"] == "America/Phoenix" and profile["timezone_editable"] is False
+        assert "appointments are stored against it" in profile["timezone_note"].lower()
+        assert client.put("/settings/salon", json={"salon_name": "Nails", "business_phone": None, "timezone": "America/New_York"}).status_code == 422
+        db = SessionLocal()
+        assert db.get(models.SalonSettings, 1).timezone == "America/Phoenix"
+        db.close()
+
+    def test_staff_get_only_deliberately_public_fields_and_never_the_settings_or_security_data(self):
+        client.put("/settings/salon", json={"salon_name": "Lotus Nails", "business_phone": "2245492806"})
+        assert client.put("/settings/security/recovery-phone", json={"phone": "6025550142", "current_password": "test-owner-password"}).status_code == 200
+        staff = _staff()
+        public_views = [staff.get(path).text for path in ("/salon", "/business-hours", "/services", "/technicians", "/appointments", "/turns/today")]
+        public_views.append(TestClient(app).get("/salon").text)
+        for body in public_views:
+            assert "6025550142" not in body and "recovery" not in body.lower()
+        assert set(TestClient(app).get("/salon").json()) <= {"id", "salon_name", "timezone", "business_phone", "address_line1", "address_line2", "city", "state", "postal_code", "slot_interval_minutes", "is_active"}
+        for method, path, body in (("get", "/settings/salon", None), ("put", "/settings/salon", {"salon_name": "Hack", "business_phone": None}),
+                                   ("get", "/settings/ai-receptionist", None), ("get", "/settings/security", None),
+                                   ("put", "/settings/security/recovery-phone", {"phone": "6025550199", "current_password": "x"}),
+                                   ("post", "/settings/security/password", {"current_password": "a", "new_password": "bbbbbbbb", "confirm_password": "bbbbbbbb"})):
+            response = getattr(staff, method)(path, **({"json": body} if body else {}))
+            assert response.status_code == 403, (method, path, response.status_code)
+            assert TestClient(app).request(method, path, **({"json": body} if body else {})).status_code == 401
+        assert client.get("/settings/salon").json()["salon_name"] == "Lotus Nails"
+
+
+class TestOwnerSecuritySettings:
+    GOOD = "test-owner-password"
+    NEW = "A-brand-new-pass-42"
+
+    def change(self, who=None, **overrides):
+        body = {"current_password": self.GOOD, "new_password": self.NEW, "confirm_password": self.NEW, **overrides}
+        return (who or client).post("/settings/security/password", json=body)
+
+    def login(self, password):
+        return TestClient(app).post("/auth/login", json={"password": password})
+
+    def test_changing_the_password_needs_the_current_one(self):
+        assert self.change(current_password="wrong-password").status_code == 400
+        assert "incorrect" in self.change(current_password="wrong-password").json()["detail"].lower()
+        assert self.change(current_password="").status_code == 422
+        assert self.login(self.GOOD).status_code == 200 and self.login(self.NEW).status_code == 401, "nothing changed"
+
+    def test_new_password_rules(self):
+        for bad in (dict(new_password="short", confirm_password="short"), dict(new_password="", confirm_password=""),
+                    dict(new_password=self.GOOD, confirm_password=self.GOOD), dict(new_password="x" * 129, confirm_password="x" * 129)):
+            assert self.change(**bad).status_code in (400, 422), bad
+        mismatch = self.change(confirm_password="something-else-entirely")
+        assert mismatch.status_code == 422 and "do not match" in mismatch.text
+        assert self.login(self.GOOD).status_code == 200
+
+    def test_a_valid_change_hashes_the_new_password_and_swaps_which_password_works(self):
+        other = TestClient(app)
+        assert other.post("/auth/login", json={"password": self.GOOD}).status_code == 200
+        staff = _staff()
+        assert staff.get("/appointments").status_code == 200
+        response = self.change()
+        assert response.status_code == 200 and response.json()["changed"] is True and response.json()["sessions_signed_out"] >= 2
+        db = SessionLocal()
+        stored = db.query(models.OwnerCredential).one().password_hash
+        assert stored.startswith("scrypt$") and self.NEW not in stored and self.GOOD not in stored
+        assert auth_service.verify_password(self.NEW, stored) and not auth_service.verify_password(self.GOOD, stored)
+        assert db.query(models.OwnerSession).filter(models.OwnerSession.revoked_at.is_(None)).count() == 0
+        db.close()
+        assert self.login(self.GOOD).status_code == 401
+        assert self.login(self.NEW).status_code == 200
+        assert client.get("/booking-services").status_code == 401, "the session that made the change is signed out too"
+        assert other.get("/booking-services").status_code == 401, "other owner sessions are revoked"
+        assert staff.get("/appointments").status_code == 200 and staff.get("/turns/today").status_code == 200, "staff mode keeps working"
+
+    def test_the_password_check_is_throttled(self):
+        statuses = [self.change(current_password=f"guess-{i}-guess").status_code for i in range(7)]
+        assert statuses[:5] == [400] * 5 and 429 in statuses[5:]
+
+    def test_recovery_phone_is_owner_only_private_and_needs_the_current_password(self):
+        assert client.get("/settings/security").json()["has_recovery_phone"] is False
+        wrong = client.put("/settings/security/recovery-phone", json={"phone": "6025550142", "current_password": "nope-nope"})
+        assert wrong.status_code == 400 and client.get("/settings/security").json()["has_recovery_phone"] is False
+        ok = client.put("/settings/security/recovery-phone", json={"phone": "(602) 555-0142", "current_password": self.GOOD})
+        assert ok.status_code == 200 and ok.json()["has_recovery_phone"] is True and ok.json()["recovery_phone_masked"] == "(***) ***-0142"
+        assert "602" not in client.get("/settings/security").text and "555" not in client.get("/settings/security").text, "only the last four digits are ever returned"
+        db = SessionLocal()
+        assert db.query(models.OwnerCredential).one().recovery_phone_e164 == "+16025550142"
+        assert db.get(models.SalonSettings, 1).business_phone != "+16025550142", "separate from the salon's public phone"
+        db.close()
+        bad = client.put("/settings/security/recovery-phone", json={"phone": "12", "current_password": self.GOOD})
+        assert bad.status_code == 400 and client.get("/settings/security").json()["recovery_phone_masked"] == "(***) ***-0142"
+        assert client.put("/settings/security/recovery-phone", json={"phone": "", "current_password": self.GOOD}).json()["has_recovery_phone"] is False
+
+    def test_sms_recovery_is_reported_as_unavailable_not_faked(self):
+        status = client.get("/settings/security").json()
+        assert status["sms_recovery_available"] is False and "reset tool" in status["sms_recovery_note"]
+        assert not any(route.path.startswith(("/auth/forgot", "/auth/recover", "/auth/reset")) for route in app.routes)
+
+    def test_offline_reset_tool_changes_the_password_and_revokes_every_owner_session(self, monkeypatch):
+        import getpass
+        import reset_owner_password
+        answers = iter(["Offline-Reset-77", "Offline-Reset-77"])
+        monkeypatch.setattr(getpass, "getpass", lambda prompt="": next(answers))
+        assert reset_owner_password.main() == 0
+        assert self.login(self.GOOD).status_code == 401 and self.login("Offline-Reset-77").status_code == 200
+        assert client.get("/booking-services").status_code == 401
+        answers = iter(["abc", "xyz"])
+        assert reset_owner_password.main() == 1  # mismatch: nothing changes
+        assert self.login("Offline-Reset-77").status_code == 200
+        answers = iter(["short", "short"])
+        assert reset_owner_password.main() == 1  # too short
+
+    def test_staff_cannot_use_any_security_endpoint(self):
+        staff = _staff()
+        assert staff.post("/settings/security/password", json={"current_password": self.GOOD, "new_password": self.NEW, "confirm_password": self.NEW}).status_code == 403
+        assert self.login(self.GOOD).status_code == 200
+
+
+class TestAiReceptionistStatus:
+    def test_status_reflects_the_server_configuration_and_never_contains_a_secret(self, monkeypatch):
+        body = client.get("/settings/ai-receptionist")
+        assert body.status_code == 200
+        status = body.json()
+        assert status["configured"] is True and status["ready_for_calls"] is True and status["voice_enabled"] is True
+        assert status["twilio_number"] == "+16025559999" and status["twilio_number_display"] == "(602) 555-9999" and status["missing"] == []
+        for secret in ("test-twilio-auth-token", "test-openai-api-key", "AC11111111111111111111111111111111", "test-internal-token", "voice.test"):
+            assert secret not in body.text, secret
+        assert not any(word in " ".join(status).lower() for word in ("token", "secret", "sid", "api_key", "password"))
+        monkeypatch.delenv("OPENAI_API_KEY")
+        monkeypatch.setenv("VOICE_ENABLED", "false")
+        off = client.get("/settings/ai-receptionist").json()
+        assert off["configured"] is False and "OpenAI" in off["missing"] and off["voice_enabled"] is False and off["ready_for_calls"] is False
+        monkeypatch.delenv("TWILIO_PHONE_NUMBER")
+        assert client.get("/settings/ai-receptionist").json()["twilio_number"] is None
+
+    def test_editing_the_public_salon_phone_does_not_touch_twilio(self):
+        import os as _os
+        before = _os.environ["TWILIO_PHONE_NUMBER"]
+        client.put("/settings/salon", json={"salon_name": "Lotus Nails", "business_phone": "2245492806"})
+        status = client.get("/settings/ai-receptionist").json()
+        assert status["public_salon_phone"] == "+12245492806" and status["twilio_number"] == "+16025559999"
+        assert _os.environ["TWILIO_PHONE_NUMBER"] == before
+        assert "not the Twilio number" in status["note"].lower() or "NOT the Twilio number" in status["note"]
+
+    def test_no_credential_is_in_any_frontend_file(self):
+        root = os.path.join(os.path.dirname(__file__), "..", "frontend")
+        for folder, _dirs, files in os.walk(root):
+            for name in files:
+                if name.endswith((".js", ".html", ".css")):
+                    text = open(os.path.join(folder, name), encoding="utf-8").read()
+                    for secret in ("TWILIO_AUTH_TOKEN", "OPENAI_API_KEY", "CHECKIN_INTERNAL_SERVICE_TOKEN", "sk-proj", "test-twilio-auth-token"):
+                        assert secret not in text, (name, secret)
+
+
+class TestTechnicianAvailabilityRollover:
+    def test_unavailable_today_clears_on_the_next_phoenix_day_without_any_owner_login(self, monkeypatch):
+        tech = make_tech("Sick Tech", specialties="manicure / pedicure, gel").json()["id"]
+        other = make_tech("Away Tech", specialties="manicure / pedicure, gel").json()["id"]
+        assert client.put(f"/technicians/{tech}", json={"status": "unavailable", "availability": "off today"}).status_code == 200
+        assert client.put(f"/technicians/{other}", json={"availability": "date off: 2026-10-12 to 2026-10-20"}).status_code == 200
+        staff = _staff()  # a browser that never enters the owner password
+        today = {t["id"]: (t["status"], t["availability"]) for t in staff.get("/technicians").json()}
+        assert today[tech] == ("unavailable", "off today"), "still unavailable on the day it was marked"
+        monkeypatch.setattr(crud, "salon_today", lambda *a, **k: date.today() + timedelta(days=1))
+        tomorrow = {t["id"]: (t["status"], t["availability"]) for t in staff.get("/technicians").json()}
+        assert tomorrow[tech] == ("active", "available today"), "reset by the server, for staff"
+        assert tomorrow[other][1].startswith("date off:"), "a multi-day date-off is left alone"
+        assert staff.post("/turns/assign-auto", json={"customer_name": "Next Day", "service_name": "Gel Manicure"}).status_code == 200
+
+    def test_rollover_is_idempotent_and_runs_in_assignment_too(self, monkeypatch):
+        tech = make_tech("Idem Tech", specialties="manicure / pedicure, gel").json()["id"]
+        client.put(f"/technicians/{tech}", json={"status": "unavailable", "availability": "off today"})
+        monkeypatch.setattr(crud, "salon_today", lambda *a, **k: date.today() + timedelta(days=1))
+        db = SessionLocal()
+        assert crud.rollover_technician_availability(db) == 1
+        assert crud.rollover_technician_availability(db) == 0
+        assert crud.rollover_technician_availability(db) == 0
+        db.close()
+        client.put(f"/technicians/{tech}", json={"status": "unavailable", "availability": "off today"})  # marked again 'tomorrow'
+        assert next(t for t in client.get("/technicians").json() if t["id"] == tech)["availability"] == "off today"
+        # auto-assignment alone (no list call first) also sees the corrected availability the next day
+        monkeypatch.setattr(crud, "salon_today", lambda *a, **k: date.today() + timedelta(days=2))
+        assert _staff().post("/turns/assign-auto", json={"customer_name": "Just Assign", "service_name": "Gel Manicure"}).status_code == 200
+
+    def test_a_legacy_row_without_a_date_is_stamped_then_cleared_the_following_day(self, monkeypatch):
+        tech = make_tech("Legacy Tech", specialties="gel").json()["id"]
+        db = SessionLocal()
+        row = db.get(models.Technician, tech)
+        row.status, row.availability, row.unavailable_on = "unavailable", "off today", None
+        db.commit()
+        assert crud.rollover_technician_availability(db) == 0 and db.get(models.Technician, tech).unavailable_on == date.today()
+        monkeypatch.setattr(crud, "salon_today", lambda *a, **k: date.today() + timedelta(days=1))
+        assert crud.rollover_technician_availability(db) == 1
+        db.close()
+
+    def test_staff_still_cannot_edit_technician_records(self, monkeypatch):
+        tech = make_tech("Guarded Tech", specialties="gel").json()["id"]
+        staff = _staff()
+        for method, path, body in (("put", f"/technicians/{tech}", {"status": "active"}), ("delete", f"/technicians/{tech}", None),
+                                   ("put", f"/technicians/{tech}/deactivate", None), ("post", "/technicians", {"full_name": "X"})):
+            response = getattr(staff, method)(path, **({"json": body} if body else {}))
+            assert response.status_code == 403, (method, path)
+        monkeypatch.setattr(crud, "salon_today", lambda *a, **k: date.today() + timedelta(days=1))
+        assert staff.get("/technicians").status_code == 200
+
+
+# ── Release audit guards ──────────────────────────────────────────────────────
+
+AUTH_ROUTES = {("GET", "/auth/session"), ("POST", "/auth/login"), ("POST", "/auth/logout"), ("POST", "/auth/staff-session")}
+PUBLIC_ROUTES = {("GET", "/"), ("GET", "/availability"), ("GET", "/business-hours"), ("GET", "/salon"), ("GET", "/services")}
+EXTERNAL_ROUTES = {("POST", "/voice/twilio/incoming"), ("POST", "/voice/twilio/status"), ("GET", "/internal/services")}
+EXPECTED_STAFF_ROUTES = {
+    ("GET", "/appointments"), ("GET", "/appointments/{appointment_id}"), ("GET", "/checkins/today"), ("GET", "/checkouts"),
+    ("GET", "/technicians"), ("GET", "/turns/today"), ("POST", "/appointments"), ("POST", "/appointments/{appointment_id}/cancel"),
+    ("POST", "/appointments/{appointment_id}/check-in"), ("POST", "/appointments/{appointment_id}/reschedule"), ("POST", "/checkins/match"),
+    ("POST", "/checkouts"), ("POST", "/turns/assign-auto"), ("POST", "/turns/assign-next"), ("POST", "/turns/assign-preferred"),
+    ("PUT", "/appointments/{appointment_id}"), ("PUT", "/turns/{turn_id}/complete"), ("PUT", "/turns/{turn_id}/reassign"),
+    ("PUT", "/turns/{turn_id}/start"), ("PUT", "/turns/{turn_id}/status"),
+}
+
+
+def _http_routes():
+    from starlette.routing import Route
+    for route in app.routes:
+        if isinstance(route, Route) and route.path not in ("/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"):
+            for method in sorted(route.methods - {"HEAD", "OPTIONS"}):
+                yield method, route.path
+
+
+def _concrete(path):
+    import re as _re
+    return _re.sub(r"\{[^}]+\}", "1", path)
+
+
+class TestRouteAccessInventory:
+    def test_the_staff_allowlist_is_exactly_the_intended_daily_operations(self):
+        staff = {(m, p) for m, p in _http_routes() if main_module._is_staff_route(m, _concrete(p))}
+        assert staff == EXPECTED_STAFF_ROUTES, (staff ^ EXPECTED_STAFF_ROUTES)
+
+    def test_every_route_is_either_deliberately_open_staff_level_or_owner_only_and_the_server_enforces_it(self):
+        anonymous, staff = TestClient(app), _staff()
+        checked = 0
+        for method, path in _http_routes():
+            if (method, path) in AUTH_ROUTES | PUBLIC_ROUTES | EXTERNAL_ROUTES:
+                continue
+            url = _concrete(path)
+            denied = anonymous.request(method, url)
+            assert denied.status_code == 401, (method, path, "anonymous must be refused", denied.status_code)
+            via_staff = staff.request(method, url)
+            if (method, path) in EXPECTED_STAFF_ROUTES:
+                assert via_staff.status_code not in (401, 403), (method, path, "staff must reach this", via_staff.status_code)
+            else:
+                assert via_staff.status_code == 403, (method, path, "staff must be refused owner-only routes", via_staff.status_code)
+            checked += 1
+        assert checked >= 55, "the inventory walked the whole API"
+
+    def test_a_brand_new_route_is_owner_only_until_someone_deliberately_opens_it(self):
+        @app.get("/__release_probe")
+        def probe():
+            return {"ok": True}
+        try:
+            assert TestClient(app).get("/__release_probe").status_code == 401
+            assert _staff().get("/__release_probe").status_code == 403
+            assert client.get("/__release_probe").status_code == 200
+        finally:
+            app.router.routes[:] = [r for r in app.router.routes if getattr(r, "path", "") != "/__release_probe"]
+
+    def test_public_and_staff_responses_never_carry_owner_secrets_or_the_recovery_phone(self):
+        client.put("/settings/security/recovery-phone", json={"phone": "6025550142", "current_password": "test-owner-password"})
+        make_tech("Leak Tech", specialties="gel")
+        staff = _staff()
+        bodies = [TestClient(app).get(p).text for p in ("/", "/salon", "/business-hours", "/services", "/availability?date=2030-01-07&service_ids=1")]
+        bodies += [staff.get(p).text for p in ("/technicians", "/appointments", "/turns/today", "/checkouts", "/salon")]
+        for body in bodies:
+            for secret in ("6025550142", "password_hash", "scrypt$", "test-twilio-auth-token", "test-openai-api-key", "test-internal-token", "test-owner-password"):
+                assert secret not in body, secret
 
 
 class TestTechnicianEditKeepsServiceEligibility:

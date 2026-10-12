@@ -18,6 +18,7 @@ import schemas
 import auth_service
 import notification_service
 import service_catalog
+import settings_service
 import voice_foundation
 from realtime_bridge import run_media_bridge
 from twilio_voice import apply_status, build_stream_twiml, validate_called_number, validated_twilio_form
@@ -25,6 +26,7 @@ from voice_config import VoiceConfig, VoiceConfigurationError
 from customer_gateway import CustomerGatewayError, HttpCustomerGateway
 from phone_normalization import normalize_us_phone
 from booking_migrations import upgrade_booking_schema
+from timeutils import salon_today
 from database import SessionLocal, engine, get_db
 
 logger = logging.getLogger("nail_salon")
@@ -99,6 +101,29 @@ app.add_middleware(
 
 
 PUBLIC_OWNER_READS = {"/", "/salon", "/business-hours", "/services", "/availability"}
+
+# Daily operations a staff session (no owner password) may perform. EVERYTHING not listed here, or not
+# public above, is owner-only: the middleware fails closed, so a new route is private by default.
+import re as _re  # noqa: E402
+STAFF_ROUTES = (
+    ("GET", _re.compile(r"^/(technicians|appointments|checkins/today|turns/today|checkouts)$")),
+    ("GET", _re.compile(r"^/appointments/\d+$")),
+    ("POST", _re.compile(r"^/(appointments|checkins/match|checkouts)$")),
+    ("POST", _re.compile(r"^/appointments/\d+/(reschedule|cancel|check-in)$")),
+    ("POST", _re.compile(r"^/turns/(assign-next|assign-auto|assign-preferred)$")),
+    ("PUT", _re.compile(r"^/appointments/\d+$")),
+    ("PUT", _re.compile(r"^/turns/\d+/(reassign|start|complete|status)$")),
+)
+STAFF_TECHNICIAN_FIELDS = {"id", "full_name", "skills", "specialties", "status", "availability", "is_active"}
+STAFF_CHECKOUT_HIDDEN = {"salon_share", "salon_actual_revenue", "technician_share", "technician_total", "net_service"}
+
+
+def _is_staff_route(method: str, path: str) -> bool:
+    return any(method == m and pattern.match(path) for m, pattern in STAFF_ROUTES)
+
+
+def _role(request: Request) -> str:
+    return getattr(request.state, "role", "owner")
 PUBLIC_TWILIO_HTTP = {"/voice/twilio/incoming", "/voice/twilio/status"}
 INTERNAL_SERVICE_READS = {"/internal/services"}  # GET only, X-Internal-Service-Token instead of an owner session
 
@@ -114,11 +139,27 @@ async def owner_authorization_boundary(request: Request, call_next):
         except HTTPException as exc:
             return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         return await call_next(request)
+    writes = request.method not in {"GET", "HEAD"}
     db = SessionLocal()
     try:
-        auth_service.authenticate_request(request, db, require_csrf=request.method not in {"GET", "HEAD"})
-    except HTTPException as exc:
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        try:
+            auth_service.authenticate_request(request, db, require_csrf=writes)
+            request.state.role = "owner"
+        except HTTPException as owner_failure:
+            if owner_failure.status_code == 403 or not _is_staff_route(request.method, path):
+                # a bad CSRF token on an owner session is final; owner-only routes never accept staff
+                if owner_failure.status_code == 401 and request.cookies.get(auth_service.STAFF_COOKIE):
+                    try:
+                        auth_service.authenticate_staff(request)
+                        return JSONResponse(status_code=403, content={"detail": "Owner access required"})
+                    except HTTPException:
+                        pass
+                return JSONResponse(status_code=owner_failure.status_code, content={"detail": owner_failure.detail})
+            try:
+                auth_service.authenticate_staff(request, require_csrf=writes)
+                request.state.role = "staff"
+            except HTTPException as staff_failure:
+                return JSONResponse(status_code=staff_failure.status_code, content={"detail": staff_failure.detail})
     finally:
         db.close()
     return await call_next(request)
@@ -138,6 +179,11 @@ async def booking_rule_handler(request, exc: booking_service.BookingRuleError):
 @app.exception_handler(booking_service.IdempotencyConflictError)
 async def idempotency_conflict_handler(request, exc: booking_service.IdempotencyConflictError):
     return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(settings_service.SettingsError)
+async def settings_error_handler(request, exc: settings_service.SettingsError):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
 @app.exception_handler(service_catalog.ServiceCatalogError)
@@ -207,6 +253,19 @@ async def twilio_media(websocket: WebSocket):
     )
 
 
+@app.post("/auth/staff-session")
+def create_staff_session(request: Request):
+    """Starts a password-free STAFF session (daily operations only; see STAFF_ROUTES). Browsers must
+    present an allowed Origin, so another website cannot mint one for the user's browser."""
+    origin = request.headers.get("origin", "")
+    if origin not in ALLOWED_ORIGINS:
+        raise HTTPException(status_code=403, detail="Origin not allowed")
+    token, csrf, expires_at = auth_service.create_staff_session()
+    response = JSONResponse({"role": "staff", "expires_at": expires_at.isoformat()})
+    auth_service.set_staff_cookies(response, token, csrf, expires_at)
+    return response
+
+
 @app.post("/auth/login", response_model=schemas.OwnerSessionOut)
 def owner_login(payload: schemas.OwnerLoginRequest, request: Request):
     db = SessionLocal()
@@ -259,8 +318,9 @@ def create_technician(technician: schemas.TechnicianCreate, db: Session = Depend
     return crud.create_technician(db, technician)
 
 
-@app.get("/technicians", response_model=list[schemas.TechnicianOut])
+@app.get("/technicians")
 def get_technicians(
+    request: Request,
     search: Optional[str] = None,
     specialty: Optional[str] = None,
     status: Optional[str] = None,
@@ -268,9 +328,14 @@ def get_technicians(
     include_inactive: bool = False,
     db: Session = Depends(get_db),
 ):
-    return crud.get_technicians(
-        db, search=search, specialty=specialty, status=status, sort_by=sort_by, include_inactive=include_inactive
-    )
+    rows = [
+        schemas.TechnicianOut.model_validate(item).model_dump(mode="json")
+        for item in crud.get_technicians(
+            db, search=search, specialty=specialty, status=status, sort_by=sort_by, include_inactive=include_inactive)
+    ]
+    if _role(request) != "owner":  # staff never receive phone numbers, notes, employee ids, photos or schedules
+        rows = [{key: value for key, value in row.items() if key in STAFF_TECHNICIAN_FIELDS} for row in rows]
+    return rows
 
 
 @app.get("/technicians/cards", response_model=list[schemas.TechnicianCardOut])
@@ -327,6 +392,57 @@ def get_salon(db: Session = Depends(get_db)):
 @app.get("/business-hours", response_model=list[schemas.BusinessHourOut])
 def get_business_hours(db: Session = Depends(get_db)):
     return db.query(models.BusinessHour).order_by(models.BusinessHour.day_of_week).all()
+
+
+# ----------------------------
+# Owner-only salon settings (none of these paths are staff routes: the middleware refuses staff)
+# ----------------------------
+@app.put("/business-hours", response_model=list[schemas.BusinessHourOut])
+def update_business_hours(payload: schemas.BusinessHoursUpdate, db: Session = Depends(get_db)):
+    """The whole week at once, validated then saved in one transaction. These are APPOINTMENT booking hours:
+    they never stop checkout, active turns or existing appointments."""
+    settings_service.replace_business_hours(db, payload.days)
+    return db.query(models.BusinessHour).order_by(models.BusinessHour.day_of_week).all()
+
+
+@app.get("/settings/salon")
+def get_salon_profile(db: Session = Depends(get_db)):
+    return settings_service.get_profile(db)
+
+
+@app.put("/settings/salon")
+def update_salon_profile(payload: schemas.SalonProfileUpdate, db: Session = Depends(get_db)):
+    return settings_service.update_profile(db, salon_name=payload.salon_name, business_phone=payload.business_phone)
+
+
+@app.get("/settings/ai-receptionist")
+def get_ai_receptionist_status(db: Session = Depends(get_db)):
+    return settings_service.ai_receptionist_status(db)
+
+
+@app.get("/settings/security")
+def get_security_settings(db: Session = Depends(get_db)):
+    return settings_service.security_status(db)
+
+
+@app.put("/settings/security/recovery-phone")
+def update_recovery_phone(payload: schemas.RecoveryPhoneUpdate, request: Request, db: Session = Depends(get_db)):
+    _session, credential = auth_service.current_owner(request, db)
+    auth_service.require_current_password(credential, payload.current_password, f"settings:{request.client.host if request.client else 'unknown'}")
+    return settings_service.set_recovery_phone(db, credential, payload.phone)
+
+
+@app.post("/settings/security/password")
+def change_owner_password(payload: schemas.PasswordChange, request: Request, db: Session = Depends(get_db)):
+    """Verifies the current password, stores the new scrypt hash and signs out EVERY owner session (this one
+    included): the owner signs in again with the new password. Staff mode is untouched."""
+    _session, credential = auth_service.current_owner(request, db)
+    auth_service.require_current_password(credential, payload.current_password, f"settings:{request.client.host if request.client else 'unknown'}")
+    auth_service.validate_new_password(payload.new_password, payload.current_password)
+    revoked = auth_service.set_owner_password(db, credential, payload.new_password)
+    response = JSONResponse({"changed": True, "sessions_signed_out": revoked})
+    auth_service.clear_session_cookies(response)
+    return response
 
 
 @app.get("/services", response_model=list[schemas.BookingServiceOut])
@@ -620,14 +736,25 @@ def delete_inventory_item(item_id: int, db: Session = Depends(get_db)):
 # ----------------------------
 # Checkout
 # ----------------------------
-@app.post("/checkouts", response_model=schemas.CheckoutOut)
-def create_checkout(payload: schemas.CheckoutCreate, db: Session = Depends(get_db)):
-    return crud.create_checkout(db, payload)
+def _checkout_for_role(request: Request, checkout) -> dict:
+    row = schemas.CheckoutOut.model_validate(checkout).model_dump(mode="json")
+    if _role(request) != "owner":
+        row = {key: value for key, value in row.items() if key not in STAFF_CHECKOUT_HIDDEN}
+    return row
 
 
-@app.get("/checkouts", response_model=list[schemas.CheckoutOut])
-def get_checkouts(db: Session = Depends(get_db)):
-    return crud.get_checkouts(db)
+@app.post("/checkouts")
+def create_checkout(request: Request, payload: schemas.CheckoutCreate, db: Session = Depends(get_db)):
+    return _checkout_for_role(request, crud.create_checkout(db, payload))
+
+
+@app.get("/checkouts")
+def get_checkouts(request: Request, db: Session = Depends(get_db)):
+    checkouts = crud.get_checkouts(db)
+    if _role(request) != "owner":  # staff see today's sales only (no historical financial reporting)
+        today = salon_today()
+        checkouts = [item for item in checkouts if item.created_at.date() == today]
+    return [_checkout_for_role(request, item) for item in checkouts]
 
 
 @app.get("/checkouts/{checkout_id}", response_model=schemas.CheckoutOut)

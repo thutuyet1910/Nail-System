@@ -263,6 +263,8 @@ class OwnerCredential(Base):
     id = Column(Integer, primary_key=True)
     username = Column(String, nullable=False, unique=True, default="owner")
     password_hash = Column(String, nullable=False)
+    # Owner-private (never in a staff or public projection). Kept apart from the salon's public phone.
+    recovery_phone_e164 = Column(String, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default=true())
     created_at = Column(DateTime, nullable=False, default=_utc_now_naive)
     updated_at = Column(DateTime, nullable=False, default=_utc_now_naive, onupdate=_utc_now_naive)

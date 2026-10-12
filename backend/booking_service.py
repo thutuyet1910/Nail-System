@@ -125,6 +125,41 @@ def _business_hours_for(db: Session, local_start: datetime, local_end: datetime)
     return local_start.time().replace(tzinfo=None) >= hours.opens_at and local_end.time().replace(tzinfo=None) <= hours.closes_at
 
 
+def _clock_text(value) -> str:
+    return datetime.combine(date.today(), value).strftime("%I:%M %p").lstrip("0")
+
+
+def _duration_text(minutes: int) -> str:
+    hours, rest = divmod(minutes, 60)
+    return " ".join(part for part in (f"{hours} hr" if hours else "", f"{rest} min" if rest else "") if part)
+
+
+def _explain_hours_violation(db: Session, local_start: datetime, local_end: datetime, total_minutes: int, slot_interval: int) -> str:
+    """Why the salon-hours check failed, in words the front desk (or a caller) can act on. The rule
+    itself is unchanged: the appointment must start AND finish inside that weekday's configured hours."""
+    day = local_start.strftime("%A")
+    hours = db.query(models.BusinessHour).filter(models.BusinessHour.day_of_week == local_start.weekday()).first()
+    if not hours or hours.is_closed or not hours.opens_at or not hours.closes_at:
+        return f"The salon is closed on {day}s. Please choose another day."
+    start_time = local_start.time().replace(tzinfo=None)
+    if start_time < hours.opens_at:
+        return f"The salon opens at {_clock_text(hours.opens_at)} on {day}s. Please choose {_clock_text(hours.opens_at)} or later."
+    if start_time >= hours.closes_at:
+        return f"The salon closes at {_clock_text(hours.closes_at)} on {day}s. Please choose an earlier time."
+    # the start is inside the day, so the services themselves run past closing
+    closes = hours.closes_at.hour * 60 + hours.closes_at.minute
+    opens = hours.opens_at.hour * 60 + hours.opens_at.minute
+    latest = closes - total_minutes
+    latest -= latest % max(slot_interval, 1)
+    duration = _duration_text(total_minutes)
+    if latest >= opens:
+        latest_text = _clock_text((datetime.min + timedelta(minutes=latest)).time())
+        return (f"These services take {duration} and would run past closing time ({_clock_text(hours.closes_at)}). "
+                f"The latest start for them is {latest_text}. Please choose an earlier appointment.")
+    return (f"These services take {duration}, which is longer than the salon's open hours on {day}s "
+            f"({_clock_text(hours.opens_at)} to {_clock_text(hours.closes_at)}). Please book them separately.")
+
+
 def _technician_is_scheduled(
     db: Session, technician_id: int, local_start: datetime, local_end: datetime
 ) -> bool:
@@ -227,7 +262,8 @@ def available_technicians_for_interval(
     start_local = as_salon_datetime(requested_start, settings.timezone)
     end_local = start_local + timedelta(minutes=plan.total_duration_minutes)
     if not _business_hours_for(db, start_local, end_local):
-        raise BookingRuleError("Requested appointment is outside salon business hours")
+        raise BookingRuleError(_explain_hours_violation(
+            db, start_local, end_local, plan.total_duration_minutes, settings.slot_interval_minutes))
     if start_local < current_salon_time(settings.timezone):
         raise BookingRuleError("Requested appointment start is in the past")
     if (start_local.hour * 60 + start_local.minute) % settings.slot_interval_minutes != 0:

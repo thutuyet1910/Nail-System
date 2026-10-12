@@ -69,6 +69,112 @@ def verify_internal_service_token(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Invalid internal service token")
 
 
+# --- Owner security settings ---------------------------------------------------------------------
+MAX_PASSWORD_LENGTH = 128
+
+
+def validate_new_password(new_password: str, current_password: str | None = None) -> str:
+    """Same floor as login/bootstrap (hash_password: at least 8 characters), plus an upper bound."""
+    if not isinstance(new_password, str) or not new_password.strip():
+        raise HTTPException(status_code=400, detail="Enter a new password")
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="The new password must be at least 8 characters")
+    if len(new_password) > MAX_PASSWORD_LENGTH:
+        raise HTTPException(status_code=400, detail=f"The new password must be at most {MAX_PASSWORD_LENGTH} characters")
+    if current_password is not None and new_password == current_password:
+        raise HTTPException(status_code=400, detail="The new password must be different from the current one")
+    return new_password
+
+
+def current_owner(request: Request, db: Session) -> tuple["models.OwnerSession", "models.OwnerCredential"]:
+    session = authenticate_request(request, db)
+    credential = db.get(models.OwnerCredential, session.credential_id)
+    if not credential or not credential.is_active:
+        raise HTTPException(status_code=401, detail="Owner session is invalid or expired")
+    return session, credential
+
+
+def require_current_password(credential: "models.OwnerCredential", password: str, client_key: str) -> None:
+    """Re-verifies the owner password for a sensitive change. Throttled like login; nothing is stored."""
+    _check_login_rate_limit(client_key)
+    if not isinstance(password, str) or not verify_password(password, credential.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    with _attempt_lock:
+        _attempts.pop(client_key, None)
+
+
+def revoke_owner_sessions(db: Session, credential_id: int) -> int:
+    now = utc_now_naive()
+    revoked = 0
+    for session in db.query(models.OwnerSession).filter(
+        models.OwnerSession.credential_id == credential_id, models.OwnerSession.revoked_at.is_(None)
+    ):
+        session.revoked_at = now
+        revoked += 1
+    db.commit()
+    return revoked
+
+
+def set_owner_password(db: Session, credential: "models.OwnerCredential", new_password: str) -> int:
+    """Stores the new scrypt hash and revokes EVERY owner session, the caller's included: the owner signs in
+    again with the new password. Staff sessions are a separate mechanism and are not touched."""
+    credential.password_hash = hash_password(validate_new_password(new_password))
+    db.commit()
+    return revoke_owner_sessions(db, credential.id)
+
+
+def reset_owner_password_offline(db: Session, new_password: str) -> int:
+    """Used by the local reset tool (reset_owner_password.py), which needs access to this computer."""
+    credential = db.query(models.OwnerCredential).filter(models.OwnerCredential.is_active.is_(True)).first()
+    if not credential:
+        raise ValueError("No owner credential exists yet")
+    return set_owner_password(db, credential, new_password)
+
+
+# --- Staff access --------------------------------------------------------------------------------
+# Daily-operations access for the salon computer (customers, appointments, checkout). It carries NO
+# password and NO owner privilege: a staff session can only reach the allow-listed staff routes in
+# main.py, with the same cookie + CSRF discipline as the owner session. Held in memory, so it simply
+# lapses on restart (the dashboard re-creates it). A future per-technician PIN would plug in here.
+STAFF_COOKIE = "staff_session"
+STAFF_CSRF_COOKIE = "staff_csrf"
+STAFF_SESSION_TTL_MINUTES = int(os.getenv("STAFF_SESSION_TTL_MINUTES", "720"))
+_MAX_STAFF_SESSIONS = 200
+_staff_sessions: dict[str, tuple[str, datetime]] = {}  # token hash -> (csrf hash, expires_at)
+_staff_lock = threading.Lock()
+
+
+def create_staff_session() -> tuple[str, str, datetime]:
+    token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(24)
+    now = utc_now_naive()
+    expires_at = now + timedelta(minutes=STAFF_SESSION_TTL_MINUTES)
+    with _staff_lock:
+        for key in [k for k, (_c, exp) in _staff_sessions.items() if exp <= now]:
+            del _staff_sessions[key]
+        while len(_staff_sessions) >= _MAX_STAFF_SESSIONS:
+            del _staff_sessions[min(_staff_sessions, key=lambda k: _staff_sessions[k][1])]
+        _staff_sessions[_token_hash(token)] = (_token_hash(csrf), expires_at)
+    return token, csrf, expires_at
+
+
+def set_staff_cookies(response: Response, token: str, csrf: str, expires_at: datetime) -> None:
+    max_age = max(0, int((expires_at - utc_now_naive()).total_seconds()))
+    response.set_cookie(STAFF_COOKIE, token, max_age=max_age, httponly=True, secure=COOKIE_SECURE, samesite="strict", path="/")
+    response.set_cookie(STAFF_CSRF_COOKIE, csrf, max_age=max_age, httponly=False, secure=COOKIE_SECURE, samesite="strict", path="/")
+
+
+def authenticate_staff(request: Request, require_csrf: bool = False) -> None:
+    raw_token = request.cookies.get(STAFF_COOKIE)
+    entry = _staff_sessions.get(_token_hash(raw_token)) if raw_token else None
+    if not entry or entry[1] <= utc_now_naive():
+        raise HTTPException(status_code=401, detail="Staff session required")
+    if require_csrf:
+        header = request.headers.get("X-Staff-CSRF-Token", "")
+        cookie = request.cookies.get(STAFF_CSRF_COOKIE, "")
+        if not header or not cookie or not hmac.compare_digest(header, cookie) or not hmac.compare_digest(_token_hash(header), entry[0]):
+            raise HTTPException(status_code=403, detail="CSRF validation failed")
+
+
 def _check_login_rate_limit(client_key: str) -> None:
     now = utc_now_naive()
     cutoff = now - timedelta(minutes=5)

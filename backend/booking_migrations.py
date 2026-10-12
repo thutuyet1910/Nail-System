@@ -95,6 +95,9 @@ def ensure_booking_columns() -> None:
         technician_columns = {column[1] for column in connection.execute(text("PRAGMA table_info(technicians)")).fetchall()}
         if technician_columns and "unavailable_on" not in technician_columns:
             connection.execute(text("ALTER TABLE technicians ADD COLUMN unavailable_on DATE"))
+        credential_columns = {column[1] for column in connection.execute(text("PRAGMA table_info(owner_credentials)")).fetchall()}
+        if credential_columns and "recovery_phone_e164" not in credential_columns:
+            connection.execute(text("ALTER TABLE owner_credentials ADD COLUMN recovery_phone_e164 VARCHAR"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_appointments_phone_e164 ON appointments (customer_phone_e164)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_turns_phone_e164 ON turns (customer_phone_e164)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_turns_appointment_id ON turns (appointment_id)"))

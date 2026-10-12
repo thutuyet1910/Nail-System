@@ -690,3 +690,69 @@ class InternalServiceOut(BaseModel):
 
 class BookingServiceAdminOut(BookingServiceOut):
     eligible_technician_ids: list[int] = []
+
+
+# ----------------------------
+# Owner settings (owner-only endpoints)
+# ----------------------------
+class SalonProfileUpdate(BaseModel):
+    """Timezone is deliberately not editable: appointments are stored against it (see settings_service)."""
+    model_config = ConfigDict(extra="forbid")
+
+    salon_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
+    business_phone: Optional[str] = Field(default=None, max_length=40)
+
+
+class BusinessDayUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    day_of_week: int = Field(ge=0, le=6)
+    is_closed: bool
+    opens_at: Optional[time] = None
+    closes_at: Optional[time] = None
+
+    @model_validator(mode="after")
+    def _check_interval(self):
+        if self.is_closed:
+            self.opens_at = self.closes_at = None  # a closed day carries no times
+            return self
+        if self.opens_at is None or self.closes_at is None:
+            raise ValueError("Opening and closing times are required for an open day")
+        if self.opens_at.second or self.opens_at.microsecond or self.closes_at.second or self.closes_at.microsecond:
+            raise ValueError("Times must be whole minutes")
+        if self.opens_at >= self.closes_at:
+            raise ValueError("Closing time must be after opening time (overnight hours are not supported)")
+        return self
+
+
+class BusinessHoursUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    days: list[BusinessDayUpdate] = Field(min_length=7, max_length=7)
+
+    @model_validator(mode="after")
+    def _every_day_once(self):
+        if sorted(day.day_of_week for day in self.days) != list(range(7)):
+            raise ValueError("Send each weekday (0 = Monday ... 6 = Sunday) exactly once")
+        return self
+
+
+class RecoveryPhoneUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    phone: Optional[str] = Field(default=None, max_length=40)  # null/blank removes it
+    current_password: str = Field(min_length=1, max_length=200)
+
+
+class PasswordChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=1, max_length=200)
+    confirm_password: str = Field(min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _confirmed(self):
+        if self.new_password != self.confirm_password:
+            raise ValueError("The new password and its confirmation do not match")
+        return self
