@@ -1,840 +1,314 @@
 # Nail Salon Owner Dashboard
 
-A full-stack nail salon management dashboard for handling salon operations after customers check in.
+The salon's day-to-day operations system: customer queue and turns, appointments and calendar,
+checkout, technicians, services, inventory, income reports, an AI phone receptionist, and salon
+settings. It runs next to a separate **Customer Check-In** application (kiosk) that feeds it the live
+customer queue.
 
-The Owner Dashboard works together with a separate **Customer Check-In System**. Customers check in through the customer-facing application, and the Owner Dashboard receives the live queue so salon staff can assign technicians, manage appointments, process checkout, track inventory, and review technician and salon income.
-
----
-
-## System Workflow
-
-The main salon workflow is:
-
-Customer Check-In
-→ Live Customer Queue
-→ Technician Assignment
-→ Service
-→ Checkout
-→ Income & History
-
-The Owner Dashboard is responsible for the salon-management side of this workflow.
+This repository contains the Owner application only (`backend/` FastAPI + SQLite, `frontend/` plain
+HTML/CSS/JS, `frontend-tests/` browser-logic tests). Exact start-up commands are in
+[DEVELOPMENT.md](DEVELOPMENT.md); security details are in [SECURITY.md](SECURITY.md); the phone
+receptionist is described in [VOICE_DEVELOPMENT.md](VOICE_DEVELOPMENT.md).
 
 ---
 
-# What This System Does
+## Contents
 
-The Owner Dashboard provides tools for:
-
-- Viewing the live customer check-in queue
-- Automatically assigning customers to technicians
-- Matching technicians by service specialty
-- Managing technician availability and schedules
-- Creating and managing appointments
-- Supporting preferred technicians
-- Viewing technician schedules on a calendar
-- Processing customer checkout
-- Applying discounts received from the Check-In System
-- Calculating technician pay and salon revenue
-- Tracking completed checkout history
-- Managing salon inventory
-- Reviewing technician income
-- Reviewing overall salon income
+1. [Architecture](#architecture)
+2. [Staff mode and Owner Management](#staff-mode-and-owner-management)
+3. [Booking hours (important semantics)](#booking-hours-important-semantics)
+4. [Calendar and appointments](#calendar-and-appointments)
+5. [Services and technicians](#services-and-technicians)
+6. [Queue, turns and checkout](#queue-turns-and-checkout)
+7. [AI phone receptionist](#ai-phone-receptionist)
+8. [Salon Settings](#salon-settings)
+9. [Check-In integration](#check-in-integration)
+10. [Project structure](#project-structure)
+11. [Configuration (environment variable names)](#configuration-environment-variable-names)
+12. [Database](#database)
+13. [Security model](#security-model)
+14. [Tests](#tests)
+15. [Current limitations](#current-limitations)
+16. [Production notes](#production-notes)
 
 ---
 
-# Required Applications
-
-The complete system uses two separate backend applications.
-
-### Customer Check-In Backend
+## Architecture
 
 ```text
-http://127.0.0.1:8000
+ Customer kiosk (Check-In frontend :5500)
+          |
+          v
+ Check-In backend :8000  <--- internal service token --->  Owner backend :8001  <--- Owner frontend :5501
+                                                              |        ^
+                                    Twilio webhooks / media   |        |  OpenAI Realtime (WebSocket)
+                                    (public https URL) -------+--------+
 ```
 
-This system handles the customer-facing check-in process, including customer information, selected services, discounts, rewards, and the live waiting queue.
+| Part | Port (local) | Notes |
+|---|---|---|
+| Check-In backend | 8000 | separate repository; owns customers and the live queue |
+| Owner backend | 8001 | this repository; the single source of truth for salon operations |
+| Check-In frontend | 5500 | kiosk page |
+| Owner frontend | 5501 | static files served from `frontend/` |
 
-### Owner Dashboard Backend
-
-```text
-http://127.0.0.1:8001
-```
-
-This system handles technician assignment, appointments, turns, checkout, inventory, and reporting.
-
-The Owner Dashboard reads the live customer queue from the Check-In backend. Therefore, both systems should be running when testing the complete customer workflow.
+The Owner backend is the **authority** for services, booking hours, technicians, appointments,
+turns and checkouts. The browser, the AI receptionist and the Check-In system all read the same data.
 
 ---
 
-# Project Structure
+## Staff mode and Owner Management
 
-```text
-Nail-System-complete/
-│
-├── backend/
-│   ├── main.py
-│   ├── crud.py
-│   ├── database.py
-│   ├── models.py
-│   ├── schemas.py
-│   ├── Test-main.py
-│   ├── requirements.txt
-│   └── nail_system.db
-│
-├── frontend/
-│   ├── index.html
-│   ├── app.js
-│   └── styles.css
-│
-└── README.md
-```
+The dashboard opens in **Staff mode with no password**. Owner Management sits on top of it and needs
+the owner password.
 
-## Backend Files
+| | Staff mode (no password) | Owner Management (password) |
+|---|---|---|
+| Screens | Customer List, Make Appointment / Calendar, Checkout | Nail Technician, Services, Inventory, Technician Income, Nail Salon Income, Salon Settings, notifications |
+| Can | view the queue, assign and run turns, create / edit / reschedule / cancel appointments, check customers out | manage technicians, services, inventory, hours, settings; read income reports and history |
+| Cannot | read income, inventory, notifications or settings; edit technicians or services; see full checkout history | n/a |
 
-### `main.py`
+How it is enforced (the browser is not trusted):
 
-Contains the FastAPI application and API routes.
+- The backend gives every route an owner-only default. A short allow-list of daily-operation routes
+  (`STAFF_ROUTES` in `backend/main.py`) is open to a **staff session**; everything else needs the
+  **owner session**. A new route is therefore private until someone deliberately opens it.
+- Staff data is also reduced: staff see technician names/availability only (no phone, notes or
+  schedules), only **today's** checkouts, and checkout receipts without the salon/technician split.
+- A staff session is created automatically by the page (`POST /auth/staff-session`), held in memory
+  on the server, carries its own CSRF token, and has **no per-user authentication yet**
+  (see [Current limitations](#current-limitations)).
 
-Responsibilities include:
+**Owner security**
 
-- Starting the Owner Dashboard API
-- Configuring CORS
-- Creating/upgrading required database structures
-- Technician API routes
-- Technician deactivate/reactivate routes
-- Appointment API routes
-- Turn and assignment routes
-- Checkout routes
-- Inventory routes
-- Income/reporting routes
-- Request validation and business-rule error handling
-
-### `crud.py`
-
-Contains the main salon business logic and database operations.
-
-Responsibilities include:
-
-- Creating and updating technicians
-- Deactivating technicians while preserving history
-- Creating and updating appointments
-- Creating salon turns
-- Auto-assigning technicians
-- Preferred technician assignment
-- Reassigning technicians
-- Managing turn status
-- Processing checkout
-- Calculating checkout values
-- Preventing duplicate checkout
-- Managing inventory
-- Calculating technician income
-- Calculating salon income
-
-### `database.py`
-
-Configures the SQLAlchemy database connection and database sessions.
-
-The local development database is:
-
-```text
-backend/nail_system.db
-```
-
-### `models.py`
-
-Defines the SQLAlchemy database tables.
-
-Main models include:
-
-- Technician
-- Appointment
-- Turn
-- Checkout
-- InventoryItem
-
-### `schemas.py`
-
-Defines Pydantic request and response models.
-
-It validates data before it reaches the database, including:
-
-- Technician information
-- Phone numbers
-- Technician status
-- Appointment information
-- People count
-- Turn assignment requests
-- Checkout amounts
-- Discounts
-- Inventory quantities
-- Inventory prices
-
-### `Test-main.py`
-
-Contains automated backend tests for the Owner Dashboard.
-
-Tests cover the main salon workflow and important business rules.
+- The owner signs in with the **owner password** (scrypt hash, throttled login, HttpOnly + SameSite
+  cookies, CSRF header on every write).
+- After **3 minutes without owner activity** the owner session is **revoked on the server**, all owner
+  data is wiped from the page, and the dashboard returns to Staff mode, which keeps working. Staff
+  clicking around in daily screens does **not** keep Owner mode alive; only trusted input while an owner
+  screen is in use counts.
+- **Change Password** is in Salon Settings (current password required; every owner session is signed
+  out afterwards).
+- If the password is forgotten, an administrator resets it **on the salon computer** with
+  `backend/reset_owner_password.py` (an emergency path, deliberately not part of the web UI).
+- SMS password recovery is **not available**. The backend can store an owner recovery phone for a future
+  release, but nothing in the UI exposes it.
 
 ---
 
-# Main Dashboard Sections
+## Booking hours (important semantics)
 
-## 1. Customer List
+The weekly hours (Salon Settings, stored in `business_hours`) are the **appointment booking hours**.
+They define when **new** appointments may be scheduled and are the single source used by:
 
-The Customer List connects to the separate Check-In System and displays customers currently waiting for service.
+manual booking, availability, the AI receptionist's availability and booking, preferred-technician
+availability, the calendar's displayed range and non-bookable shading, the latest valid start for a
+service combination, and `get_salon_info`.
 
-### Live Customer Queue
+An appointment must **start and finish** inside the day's hours (for example, Monday 9:00 AM - 6:00 PM
+with a 2 hr 30 min service: latest start 3:30 PM).
 
-Shows customers who have completed the customer check-in process and are waiting for a technician.
-
-Customer information may include:
-
-- Customer name
-- Phone number
-- Selected services
-- Preferred technician
-- Discount/reward information
-- Check-in information
-
-### Auto Assign
-
-The **Auto Assign** function finds an appropriate technician for a waiting customer.
-
-The assignment process considers:
-
-1. The technician must still be an active salon employee.
-2. The technician must currently have an active working status.
-3. The technician must be available today.
-4. The technician's specialty must match the customer's selected service.
-5. The technician cannot already have another active customer.
-6. Among eligible technicians, the system can use today's turn history to distribute assignments.
-
-Once assigned, the customer moves from the waiting queue into the salon service/checkout workflow.
-
-### Salon History - Checked-Out Today
-
-Shows customers who completed checkout during the current day.
-
-This allows the owner to quickly review today's completed salon services.
-
-### Check-Out History
-
-Loads completed checkout records so previous transactions can be reviewed.
+They are **not** a shutdown time. After closing, Staff can still see customers and appointments,
+continue active turns, complete services and check customers out. Changing the hours never moves or
+deletes existing appointments; an existing appointment outside new hours stays visible at its real time.
 
 ---
 
-# 2. Technician Directory
+## Calendar and appointments
 
-The Technician Directory manages salon employees.
-
-Each technician can contain information such as:
-
-- Full name
-- Employee ID
-- Phone
-- Skills
-- Specialties
-- Start date
-- Status
-- Availability
-- Weekly work schedule
-- Notes
-- Profile photo
-
-### Technician Status
-
-Technician status represents the technician's current working state.
-
-For example:
-
-```text
-Active
-Off
-Unavailable
-```
-
-### Availability
-
-Availability indicates whether the technician can accept customers today.
-
-For example:
-
-```text
-Available today
-Off today
-```
-
-### Active / Inactive Technician
-
-The system also distinguishes between a technician's daily status and whether the technician still works for the salon.
-
-```text
-is_active = true
-```
-
-means the technician is still an active salon employee.
-
-```text
-is_active = false
-```
-
-means the technician has been deactivated.
-
-Deactivation is used to preserve historical salon records when a technician leaves.
-
-Historical appointments, turns, checkouts, and income information can therefore remain available.
-
-### Delete Technician
-
-If a technician has no salon history, the technician can be permanently deleted.
-
-If the technician already has appointment, turn, or checkout history, the system preserves that history by deactivating the technician instead of deleting historical records.
-
-### Reactivate Technician
-
-A previously deactivated technician can be reactivated if they return to work at the salon.
-
-### Specialties
-
-Technician specialties are used by the assignment system to determine which services the technician can perform.
-
-Examples include:
-
-```text
-Manicure / Pedicure
-Acrylic
-Dip Powder
-Gel
-Builder / Hard Gel
-Nail Art
-Waxing
-Facial
-```
-
-Specialties are also displayed in a compact format on technician cards to keep the directory easier to read.
+- The calendar shows the span from the earliest opening to the latest closing of the week and labels the
+  **closing boundary** (a 9-6 day reads 9 am ... 5 pm, 6 pm). Time that cannot be booked that day is shaded.
+  Late appointments and active turns outside the hours are still drawn at their true time (the span grows
+  to include them).
+- A thin red **current-time line** follows the salon clock (**America/Phoenix**, independent of the
+  browser's timezone) and is minute-accurate.
+- The calendar refreshes by itself every 5 seconds (appointments created by phone or from another
+  screen appear without reloading). Returning to the calendar shows the last good data immediately and
+  refreshes in the background; a failed refresh never blanks it.
+- Appointments are stored with a UTC instant plus the salon-local time, durations/buffers are snapshotted,
+  and creation is idempotent and transactionally rechecked (overlaps, technician schedule, blocked time,
+  eligibility, business hours).
+- Dates in the UI use `MM-DD-YYYY`.
 
 ---
 
-# 3. Appointments
+## Services and technicians
 
-The Appointment section allows salon staff to create and manage future appointments.
+- **Services** (Owner Management) are the authoritative catalog: name, category, duration, price
+  (optional - an unknown price stays unknown), buffers, active/inactive. Services are never deleted,
+  only deactivated; existing appointments keep their own snapshots.
+- **Technician eligibility** lives in `technician_services`. It can be edited per service on the Services
+  page. Saving a technician only recomputes eligibility from the technician's *specialties* text when the
+  specialties actually changed.
+- **Specialties / service groups** (Nail Technician form) are still in use: they seed eligibility for new
+  technicians and are the matching key for legacy name-only check-in visits. They are not obsolete.
+- **Technician availability:** "unavailable today" resets on the next **salon (Phoenix) day**, on the
+  server, without anyone opening Owner Management. Multi-day "date off" entries are left alone.
 
-An appointment can contain:
+---
 
-- Customer name
-- Customer phone
-- Service
-- Appointment date
-- Appointment time
-- Number of people
-- Customer type
-- Preferred technician
-- Assigned technician
-- Notes
-- Special requests
-- Allergies
-- Appointment status
+## Queue, turns and checkout
 
-### Appointment Status
+A **turn** is a customer's service workflow after assignment: `waiting -> assigned -> in_service -> done`
+(or `cancelled`). Completed and cancelled turns are final; turn numbers restart each day.
 
-Appointments can maintain their current status instead of always appearing as scheduled.
+- **Auto assignment** filters technicians (active employee, working, available today, eligible for the
+  service, free right now) and then balances by the day's turn counts. **Preferred** assignment is a hard
+  requirement: the technician must exist, be available, be eligible for the service and be free.
+- **Checkout** inputs are the service subtotal, discount, tip and payment method. The backend calculates
+  discount, net service, technician share (60%), salon share, technician total and salon revenue; the
+  frontend's numbers are never trusted. A turn can be checked out once, and checkout completes the turn.
+- **Inventory**, **Technician Income** and **Nail Salon Income** (day / week / year) are Owner Management
+  screens built on the checkout history.
 
-Examples include:
+Business rules that are always enforced: a technician must match the requested service, an unavailable
+technician cannot receive a customer, one active customer per technician, inactive technicians are
+excluded but their history is kept, completed turns cannot move backward, invalid discounts are rejected.
+
+---
+
+## AI phone receptionist
+
+A Twilio phone number connects (Media Streams) to the backend, which bridges the call to the OpenAI
+Realtime API. The assistant:
+
+- tells the caller once, at the start, that it is the salon's AI receptionist;
+- answers from tools only: `get_salon_info`, `list_services`, `get_service_details`,
+  `get_available_slots`, `identify_customer_candidate`, `request_owner_callback`, `create_booking`;
+- books **one new appointment per call** through the same booking service as the dashboard: slots come
+  only from `get_available_slots` (opaque, call-bound slot ids), the caller must hear a backend-built
+  summary and clearly confirm, and the booking is transactionally rechecked and idempotent;
+- treats a **named technician as a hard requirement** (never silently substituted), and does not volunteer
+  technician names unless asked;
+- cannot reschedule, cancel, look up appointments, or change anything else: those requests go to
+  `request_owner_callback`.
+
+Safety: Twilio webhooks are signature-checked, the media stream needs a single-use token, the Realtime
+session must be confirmed ready before audio flows, provider errors are recorded as sanitized metadata,
+and **no audio or transcript is stored**. The AI is switched on only with `VOICE_ENABLED` and
+`VOICE_ALLOW_REAL_CALLS`. See [VOICE_DEVELOPMENT.md](VOICE_DEVELOPMENT.md).
+
+---
+
+## Salon Settings
+
+Owner Management -> Salon Settings:
+
+1. **Salon Information** - salon name and public phone. The time zone is shown but read-only (appointments
+   are stored against it, so changing it later would silently move real appointments).
+2. **Appointment / Booking Hours** - all seven days, saved as one validated, atomic change. Takes effect
+   everywhere immediately.
+3. **Phone / AI Receptionist** - read-only status (configured / not configured, Twilio number, voice
+   on/off). Secrets are never shown. The **public salon phone** is what customers know; the **Twilio number**
+   is the line the AI answers. They are separate settings, and changing the salon phone does not change Twilio.
+4. **Owner Security** - Change Password.
+
+---
+
+## Check-In integration
+
+- The Owner backend reads the live queue from the Check-In backend (`CHECKIN_API_BASE`) with the shared
+  internal service token.
+- Check-In reads the active service catalog from `GET /internal/services` (service token, read-only) and
+  sends **service ids**; Owner resolves by id first and falls back to names only for old name-only visits.
+  An unknown or deactivated id never falls back to a name; the visit stays in the queue with a warning.
+- Booking hours do not gate check-in or the queue.
+
+---
+
+## Project structure
 
 ```text
-scheduled
-checked_in
-done
-cancelled
+backend/
+  main.py               routes, access middleware (owner / staff / public), staff allow-list
+  auth_service.py       owner + staff sessions, CSRF, password hashing, login throttling
+  settings_service.py   salon profile, weekly hours, AI status (no secrets), owner security
+  booking_service.py    availability, validation, transactional booking, idempotency
+  booking_migrations.py idempotent schema upgrades and development seed data
+  service_catalog.py    owner service catalog + internal read model
+  crud.py               technicians, turns, assignment, checkout, income, rollover
+  checkin_service.py    check-in <-> appointment matching, service-id parsing
+  customer_gateway.py   Owner -> Check-In client
+  voice_*.py, realtime_bridge.py, twilio_voice.py   AI phone receptionist
+  reset_owner_password.py   local emergency password reset
+  Test-main.py          backend test suite
+frontend/
+  index.html, styles.css
+  js/                   dashboard (calendar, queue, checkout, technicians, services, inventory,
+                        income, notifications), owner lock, salon settings, dashboard loading
+frontend-tests/         browser-logic tests (run with Node, no dependencies)
 ```
 
-This also allows appointment lists to be filtered by status.
+---
 
-### Preferred Technician
+## Configuration (environment variable names)
 
-Customers can request a preferred technician.
+Values are never stored in the repository. The backend reads the **process environment** (it does not
+load a `.env` file); `.env.example` lists the names with placeholder values.
 
-The appointment stores the preferred technician separately from the technician who is eventually assigned to perform the service.
+| Area | Names |
+|---|---|
+| Database | `DATABASE_URL` |
+| Owner login | `OWNER_BOOTSTRAP_PASSWORD` (first start only, when no credential exists), `OWNER_PASSWORD_HASH` (alternative), `OWNER_SESSION_TTL_MINUTES`, `OWNER_COOKIE_SECURE`, `OWNER_LOGIN_ATTEMPTS_PER_5_MINUTES`, `STAFF_SESSION_TTL_MINUTES` |
+| Browser origins | `ALLOWED_ORIGINS` (must include the Owner frontend origin, e.g. `http://127.0.0.1:5501`) |
+| Check-In link | `CHECKIN_API_BASE`, `CHECKIN_INTERNAL_SERVICE_TOKEN` |
+| Public address | `PUBLIC_BASE_URL` (https origin Twilio can reach) |
+| Voice switches | `VOICE_ENABLED`, `VOICE_ALLOW_REAL_CALLS` (both default off) |
+| Twilio | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` |
+| OpenAI | `OPENAI_API_KEY`, `OPENAI_REALTIME_MODEL`, `OPENAI_REALTIME_VOICE` |
+| Voice tuning | `VOICE_STREAM_TOKEN_TTL_SECONDS`, `VOICE_MAX_CALL_MINUTES`, `VOICE_TOOL_TIMEOUT_SECONDS` |
 
 ---
 
-# 4. Technician Calendar
+## Database
 
-The calendar provides a visual schedule of technician appointments.
-
-It is designed to help the salon owner quickly see:
-
-- Technician schedules
-- Appointment times
-- Preferred technician appointments
-- Assigned appointments
-- In-service appointments
-
-Appointments appear under the appropriate technician's calendar column.
-
-Technician colors are used consistently so appointments and technicians can be recognized quickly.
-
-The interface provides ten technician colors before colors repeat.
+SQLite (`DATABASE_URL`, default `backend/nail_system.db`). Database files are git-ignored: never commit
+them. Schema upgrades run at start-up and are **idempotent and non-destructive** (columns are added, nothing
+is rewritten); foreign keys are enforced. Use a separate file (for example `nail_system-private-test.db`)
+for private call tests. The seed data (salon name, hours Mon-Sat 9-6, services, durations, technician
+eligibility) is a development placeholder: review it before a real pilot.
 
 ---
 
-# 5. Customer Assignment and Turns
+## Security model
 
-A **Turn** represents a customer's salon service workflow after assignment.
-
-A turn stores information such as:
-
-- Turn number
-- Customer
-- Service
-- Assigned technician
-- Preferred technician
-- Discount information
-- Assignment source
-- Status
-- Created time
-- Assigned time
-- Service start time
-- Completion time
-
-Turn numbers restart each day.
-
-### Turn Status Flow
-
-The normal workflow is:
-
-```text
-waiting
-   ↓
-assigned
-   ↓
-in_service
-   ↓
-done
-```
-
-A turn may also become:
-
-```text
-cancelled
-```
-
-Completed and cancelled turns are final.
-
-The system prevents completed turns from being reassigned and prevents completed workflow states from accidentally moving backward.
+Summary (details in [SECURITY.md](SECURITY.md)): fail-closed route access; owner and staff sessions with
+CSRF; owner-only data never reaches staff; Twilio signature validation and single-use media tokens; secrets
+only in the server environment; no audio/transcript storage; the recovery phone (reserved for later) never
+leaves the owner endpoints.
 
 ---
 
-# 6. Auto Assignment
-
-Auto Assignment attempts to select a technician automatically instead of requiring the manager to choose one manually.
-
-The system first filters technicians based on:
-
-```text
-Active employee
-      ↓
-Working/active status
-      ↓
-Available today
-      ↓
-Correct specialty
-      ↓
-No other active customer
-```
-
-Eligible technicians can then be compared using their turn activity for the current day.
-
-Cancelled turns are not treated as completed service turns.
-
-The goal is to distribute customers while still respecting technician availability and service specialty.
-
----
-
-# 7. Manual / Preferred Assignment
-
-Salon staff can also assign customers manually.
-
-Preferred Technician assignment checks that:
-
-- The technician exists
-- The technician is active
-- The technician is available today
-- The technician can perform the selected service
-- The technician is not already servicing another active customer
-
-A customer can also be reassigned when necessary.
-
-Completed or cancelled turns cannot be reassigned.
-
----
-
-# 8. Checkout
-
-The Checkout section shows customers who have been assigned and are ready to complete payment.
-
-Checkout uses information from the customer's turn, including:
-
-- Customer
-- Technician
-- Service
-- Discount information
-
-### Checkout Inputs
-
-The checkout request provides the information needed to calculate payment, such as:
-
-```text
-Service subtotal
-Discount type
-Discount value
-Tip
-Payment method
-```
-
-### Server-Side Checkout Calculation
-
-Important financial values are calculated by the backend rather than trusted from the frontend.
-
-The backend calculates values such as:
-
-- Discount amount
-- Net service amount
-- Technician share
-- Salon share
-- Technician total
-- Salon actual revenue
-- Customer total
-
-This keeps income calculations consistent even if the frontend changes.
-
-### Technician Pay
-
-The system supports the salon's technician percentage calculation.
-
-The current workflow uses a:
-
-```text
-60% technician share
-```
-
-along with tip and salon revenue calculations.
-
-### Discount Handling
-
-Discount information can be carried from the customer Check-In System into the Owner Dashboard.
-
-Checkout validates discount values so invalid amounts cannot produce negative service totals.
-
-### Preventing Duplicate Checkout
-
-A turn can only be checked out once.
-
-If a second checkout request is submitted for the same turn, the backend rejects it instead of creating duplicate revenue.
-
-### Completing Checkout
-
-Successful checkout also completes the associated customer turn.
-
-The checkout and turn completion are handled together so the system does not save a payment while accidentally leaving the customer active.
-
----
-
-# 9. Inventory
-
-The Inventory section manages salon products and supplies.
-
-Inventory items can contain:
-
-- Item name
-- Category
-- Supplier
-- Quantity
-- Unit price
-- Purchase date
-- Low-stock level
-
-### Low Stock
-
-The system compares the current quantity with the configured low-stock level.
-
-This helps identify supplies that may need to be reordered.
-
-### Inventory Value and Expenses
-
-Inventory data can also be used to calculate:
-
-- Total inventory value
-- Weekly expense
-- Monthly expense
-- Yearly expense
-- Number of low-stock items
-
----
-
-# 10. Technician Income
-
-The Technician Income section shows earnings grouped by technician.
-
-Reports can include:
-
-- Service subtotal
-- Technician percentage/share
-- Tips
-- Technician total
-- Number of turns
-- Individual checkout details
-
-The owner can review technician performance and income for selected dates and reporting ranges.
-
----
-
-# 11. Nail Salon Income
-
-The Nail Salon Income section summarizes salon financial activity.
-
-Reports can include:
-
-- Income before discounts
-- Total discounts
-- Income after discounts
-- Technician share
-- Technician tips
-- Total paid to technicians
-- Salon income after technician pay
-- Number of completed turns
-
-Reports support date-based views including:
-
-```text
-Day
-Week
-Year
-```
-
-The dashboard also provides reporting views for reviewing salon income over different periods.
-
----
-
-# 12. Checkout History
-
-Completed checkout records are retained for salon reporting and review.
-
-Checkout history can include:
-
-- Customer
-- Technician
-- Service
-- Payment method
-- Service subtotal
-- Discount
-- Net service amount
-- Technician share
-- Tip
-- Technician total
-- Salon revenue
-- Customer payment
-- Checkout date/time
-
-This history is also used by income reporting.
-
----
-
-# Running the Owner Dashboard
-
-## 1. Open the Project
-
-Open a terminal and navigate to the backend:
+## Tests
 
 ```powershell
-cd backend
-```
-
-## 2. Create the Virtual Environment
-
-For the first setup:
-
-```powershell
-py -m venv venv
-```
-
-Activate it:
-
-```powershell
-venv\Scripts\Activate
-```
-
-## 3. Install Dependencies
-
-```powershell
-python.exe -m pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-## 4. Start the Owner Backend
-
-```powershell
-python -m uvicorn main:app --reload --port 8001
-```
-
-The backend will run at:
-
-```text
-http://127.0.0.1:8001
-```
-
-FastAPI documentation:
-
-```text
-http://127.0.0.1:8001/docs
-```
-
----
-
-# Running the Customer Check-In System
-
-For the complete salon workflow, also start the separate Customer Check-In backend on:
-
-```text
-http://127.0.0.1:8000
-```
-
-The Owner Dashboard uses this backend to retrieve the live customer waiting queue.
-
----
-
-# Running the Frontend
-
-From the backend folder, the frontend can be opened with:
-
-```powershell
-start ../frontend\index.html
-```
-
-For development, VS Code Live Server can also be used.
-
----
-
-# Running Tests
-
-Open a terminal in the Owner Dashboard backend folder.
-
-Run:
-
-```powershell
+# backend (from backend\, venv active)
 python -m pytest Test-main.py -q
+
+# browser logic (from the repository root; needs Node)
+node frontend-tests/owner-ui.test.js
+Get-ChildItem frontend\js\*.js | ForEach-Object { node --check $_.FullName }
 ```
 
-Expected test result for the current tested version:
-
-```text
-101 passed
-```
-
-The test database is separate from the production/development salon database.
-
-```text
-Development database:
-backend/nail_system.db
-
-Test database:
-backend/test_owner.db
-```
+The backend suite uses a throwaway database and fake Twilio/OpenAI connections: it never places a call
+or sends data to a provider.
 
 ---
 
-# Database
+## Current limitations
 
-The Owner Dashboard currently uses SQLite.
+- **Staff mode has no per-user authentication** (anyone using the salon computer is staff). The server is
+  meant to be reachable only from that machine / the salon network.
+- **SMS password recovery is not available.** The local reset tool is the only recovery path.
+- The weekly hours can be edited per weekday; there are no per-date exceptions (holidays) yet.
+- Walk-in acceptance has no cut-off time; booking hours do not limit it.
+- One owner login (no multiple owner accounts); one salon per installation; one AI booking per call.
+- The in-process login throttle is for a single server process.
 
-Main database:
+## Production notes
 
-```text
-backend/nail_system.db
-```
-
-The database stores:
-
-- Technicians
-- Appointments
-- Turns
-- Checkouts
-- Inventory
-
-Database indexes are used on frequently filtered fields such as turn dates, turn statuses, technician assignments, and checkout dates.
-
----
-
-# Date Format
-
-User-facing date inputs use:
-
-```text
-MM-DD-YYYY
-```
-
-Example:
-
-```text
-10-01-2026
-```
-
-Year inputs are limited to four digits.
-
----
-
-# Important Business Rules
-
-The system follows several rules to protect salon data:
-
-- A technician must match the customer's requested service.
-- An unavailable technician cannot receive a new customer.
-- A technician cannot handle multiple active customers at the same time.
-- Inactive technicians are excluded from normal assignment.
-- Technician history is preserved when an employee leaves.
-- Completed or cancelled turns cannot be reassigned.
-- Completed turn statuses cannot move backward.
-- A turn cannot be checked out twice.
-- Checkout calculations are performed by the backend.
-- Invalid discount amounts are rejected.
-- Historical appointments connected to checkout records are protected.
-
----
-
-# Development Notes
-
-The Owner Dashboard and Customer Check-In System are separate applications that communicate during the customer workflow.
-
-For complete local testing, run:
-
-```text
-Customer Check-In Backend : port 8000
-Owner Dashboard Backend   : port 8001
-Owner Frontend            : browser / Live Server
-```
-
-The project is designed so customer check-in remains separate from salon management while still allowing the Owner Dashboard to receive live customer information.
-
----
-
-# Current Development Status
-
-The system currently supports the main salon workflow:
-
-```text
-Customer Check-In
-        ↓
-Live Queue
-        ↓
-Technician Assignment
-        ↓
-Appointment / Service Management
-        ↓
-Checkout
-        ↓
-Checkout History
-        ↓
-Technician & Salon Income Reporting
-```
-
-Additional production security, including authentication and authorization, should be added before exposing the Owner Dashboard API publicly.
+- A **Cloudflare Quick Tunnel is for development only** (its URL changes). Production needs a stable
+  hosted https endpoint / domain for `PUBLIC_BASE_URL`, and the Twilio webhooks pointed at it.
+- Set `OWNER_COOKIE_SECURE=true` behind https, restrict `ALLOWED_ORIGINS` to the deployed frontend, use a
+  reverse proxy for TLS and request limits, and run real secret management.
+- Review spend limits and monitoring for Twilio and OpenAI before enabling real calls.

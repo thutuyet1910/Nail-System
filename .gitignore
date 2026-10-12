@@ -13,3 +13,20 @@ __pycache__/
 .pytest_cache/
 pytest-cache-files-*/
 *.log
+# More local-only artifacts
+.env.*
+!.env.example
+*.pem
+*.key
+*.bak
+*.tmp
+coverage/
+.coverage
+htmlcov/
+.idea/
+.vscode/
+Thumbs.db
+cloudflared*.log
+*.db-journal
+*.db-wal
+*.db-shm

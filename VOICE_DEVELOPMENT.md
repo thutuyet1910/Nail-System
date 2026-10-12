@@ -1,65 +1,65 @@
-# Read-only AI phone receptionist development
+# AI phone receptionist: development notes
 
-## Implemented protocol
+## Protocol
 
-The server uses the Twilio Python SDK 9.x request validator/TwiML builder with current Programmable
-Voice webhooks and bidirectional `<Connect><Stream>` Media Streams. It connects directly to OpenAI's
-GA Realtime WebSocket API at `wss://api.openai.com/v1/realtime` (no deprecated beta header), with the
-model selected by `OPENAI_REALTIME_MODEL` and defaulting to the current `gpt-realtime-2.1`. The
-session uses `audio/pcmu` for input and output.
+The backend uses the Twilio Python SDK request validator and TwiML builder with Programmable Voice
+webhooks and bidirectional `<Connect><Stream>` Media Streams. It connects to OpenAI's GA Realtime
+WebSocket API (`wss://api.openai.com/v1/realtime`) with the model from `OPENAI_REALTIME_MODEL` (default
+`gpt-realtime-2.1`). Audio is `audio/pcmu` both ways: Twilio's 8 kHz mu-law frames are forwarded unchanged,
+and OpenAI's PCMU deltas are sent back unchanged (no transcoding).
 
-Twilio sends base64-encoded `audio/x-mulaw`, 8 kHz, mono bytes. Those bytes are forwarded unchanged
-to OpenAI as `input_audio_buffer.append`. OpenAI `response.output_audio.delta` PCMU bytes are sent
-unchanged to Twilio `media` messages. There is no transcoding or resampling.
+## Call lifecycle
+
+1. Twilio posts `/voice/twilio/incoming` (signature checked). The reply is TwiML with the stream URL, a
+   single-use stream token and, after the stream, one generic spoken line used only if the stream ends
+   while the caller is still on the line.
+2. Twilio opens `/voice/twilio/media`; the `start` message is authenticated (account, format, token).
+3. The bridge connects to OpenAI and waits for `session.created`, sends `session.update`, and waits for
+   `session.updated` (10 s timeout). Only then does it send the greeting and start forwarding caller audio.
+4. Tool calls run against the backend; several tool calls in one model response are answered together
+   with a single `response.create`.
+5. The call ends on hangup, a provider close or failure, or `VOICE_MAX_CALL_MINUTES`. Failures are recorded
+   as sanitized `failed` / `provider_error` events (stage, error type and code, close code); a normal
+   hangup is never labelled a failure.
+
+## Booking by phone
+
+`get_available_slots` returns real availability for the chosen service ids (it uses the same booking
+hours, durations, buffers, schedules, blocks and overlaps as the dashboard) plus an opaque `slot_id`.
+`create_booking` is two-step: prepare (returns a backend summary, books nothing), then commit after the
+caller clearly confirms. The booking is idempotent per call and slot, one per call. A named technician
+(`technician_name`) is a hard constraint; with no preference any eligible technician may be assigned.
+Rescheduling and cancelling are not supported by phone: the assistant offers an owner callback.
+
+The configured weekly hours are **scheduling hours**: the assistant never offers a time outside them or a
+service that would finish after closing, and says nothing about walk-ins.
 
 ## Local setup
 
-1. Install `backend/requirements.txt` and run the owner FastAPI backend.
-2. Create a secure HTTPS/WSS tunnel to that backend. `localhost` is not reachable by Twilio.
-3. Set `PUBLIC_BASE_URL` to the public HTTPS origin only (no trailing slash).
-4. Configure the Twilio number's incoming voice webhook as an HTTP `POST` to
-   `${PUBLIC_BASE_URL}/voice/twilio/incoming`.
-5. Configure call status callbacks as HTTP `POST` to `${PUBLIC_BASE_URL}/voice/twilio/status`.
-   The generated TwiML also uses this route for stream lifecycle callbacks.
-6. Set the Twilio/OpenAI variables documented in `.env.example`.
-7. Enable `VOICE_ENABLED=true` and `VOICE_ALLOW_REAL_CALLS=true` only for an intentional private
-   test. Leave both false otherwise.
+See [DEVELOPMENT.md](DEVELOPMENT.md) for the exact commands, the tunnel and the Twilio webhook settings.
+Use a private-test database, enable `VOICE_ENABLED` / `VOICE_ALLOW_REAL_CALLS` only for an intentional test,
+and check provider spend limits first.
 
-The app derives the `wss://.../voice/twilio/media` URL from `PUBLIC_BASE_URL`; tunnel-provider details
-are not part of the business logic. The URL used to compute Twilio signatures must exactly match the
-public webhook URL, so proxy-local scheme/host values are deliberately ignored.
+## Behaviour notes
 
-## Safe test flow
+- Past start times are rejected and never offered, using the salon (America/Phoenix) clock.
+- Anonymous, blocked or non-US caller IDs still get valid TwiML: the call has no trusted phone, customer
+  lookup reports no match, and a callback requires the caller to say a number (stored as untrusted).
+- Exactly one owner callback is recorded per call; deduplication is server-owned.
+- `identify_customer_candidate` returns only `{"matched": true|false}`.
+- A finished call can never be reopened by a late media stream.
+- OpenAI `error` events: errors caused by our own truncate request, or on a short allow-list, are audited
+  and the call continues; auth / quota / server / unknown errors end the call (fail closed).
+- Prices that are unknown stay unknown; the assistant says so instead of inventing one.
 
-The automated suite signs simulated Twilio forms with a test token and uses fake media/OpenAI
-connections. It never places a paid call and never sends data to OpenAI. Before a private test call,
-also verify the tunnel's TLS certificate, Twilio webhook error logs, environment isolation, spend
-limits, and owner failure notifications.
+## Development seed data
 
-## Repair-pass behavior (read before a private test call)
+The salon name, weekly hours, services, durations, buffers and technician eligibility seeded by
+`booking_migrations.py` are development placeholders, not confirmed by the owner. Review all of it in
+Owner Management before a real salon pilot.
 
-- Past start times are rejected by the booking domain (create, reschedule) and never offered as slots,
-  using the salon (America/Phoenix) clock.
-- Anonymous, blocked, or non-US caller IDs still receive valid TwiML. The call has **no trusted phone**;
-  customer lookup reports "no match", and a callback requires the caller to *say* a number. A spoken
-  number is stored only as an untrusted contact detail (`phone_source: spoken_by_caller`).
-- Exactly one owner callback is recorded per call; deduplication is server-owned, not model-chosen.
-- `identify_customer_candidate` returns only `{"matched": true|false}` (caller ID is spoofable).
-- A finished (completed/failed) call can never be reopened by a late media stream.
-- OpenAI Realtime `error` events: errors caused by our best-effort truncate, or on a short allow-list,
-  are audited (`provider_error` event) and the call continues; auth/quota/server/unknown errors end the
-  call (fail closed). More than 10 recoverable errors in one call also ends it.
+## Not implemented
 
-## DEVELOPMENT / UNCONFIRMED salon data
-
-The salon name ("Nail Salon"), business hours (Mon-Sat 09:00-18:00), service list, durations, buffers
-and technician eligibility seeded by `booking_migrations.py` are development placeholders, **not
-confirmed by the owner**. Prices are NULL (unknown) and the assistant says so. Review all of it before
-a real salon pilot.
-
-## Current limitations
-
-This phase is read-only. It cannot create, reschedule, cancel, or reveal an appointment. Caller ID is
-only a candidate match, not authentication. Level-2 verification, OTP/SMS, recording, transcript
-persistence, payments, multi-salon routing, shared distributed rate limiting, and production
-operational monitoring remain out of scope.
+Recording, transcript storage, caller identity verification above caller-ID matching, SMS / OTP,
+rescheduling and cancelling by phone, payments, multi-salon routing, shared (multi-process) rate limiting
+and production monitoring.

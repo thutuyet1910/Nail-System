@@ -1,110 +1,50 @@
 # Owner Dashboard Backend
 
-FastAPI backend for the nail salon owner dashboard.
+FastAPI + SQLite backend for the nail salon Owner Dashboard. The full description of the system is in the
+repository [README](../README.md); exact start-up commands are in [DEVELOPMENT.md](../DEVELOPMENT.md).
 
-## Backend Responsibilities
+## Responsibilities
 
-- Technicians and technician cards
-- Appointments and preferred technician booking
-- Calendar data
-- Dispatch turns and auto assignment
-- Checkout and checkout history
-- Inventory
-- Technician income reports
-- Nail salon income reports
+- Staff and owner sessions, access control, CSRF, login throttling
+- Technicians, availability (with a server-side daily rollover), schedules and eligibility
+- Owner service catalog, weekly booking hours, salon settings
+- Appointments, availability and the transactional booking service
+- Queue, turns, assignment, checkout, inventory and income reports
+- Owner notifications
+- Check-In integration (live queue, service catalog for Check-In)
+- AI phone receptionist (Twilio Media Streams + OpenAI Realtime)
 
-## Run Server
-
-Open this folder in a terminal:
-
-```text
-C:\Users\Flying Phoenix PCs\source\repos\Nail-System-complete\Nail-System-complete\backend
-```
-
-Then run:
+## Run
 
 ```powershell
-venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python -m uvicorn main:app --reload --port 8001
+cd <repository>\backend
+venv\Scripts\python.exe -m pip install -r requirements.txt
+venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8001
 ```
 
-Server:
+The backend reads its settings from the process environment (names in `../.env.example`). API root:
+`http://127.0.0.1:8001/`, interactive docs: `http://127.0.0.1:8001/docs`.
 
-- API root: `http://127.0.0.1:8001`
-- Swagger docs: `http://127.0.0.1:8001/docs`
-
-## Run Tests
+## Test
 
 ```powershell
-venv\Scripts\Activate.ps1
-python -m pytest Test-main.py -q
+venv\Scripts\python.exe -m pytest Test-main.py -q
 ```
 
-Current expected result:
+## Main endpoint groups
 
-```text
-101 passed
-```
+| Group | Who may call it |
+|---|---|
+| `/auth/*` | public by design (login, staff session, logout, session status) |
+| `/`, `/salon`, `/business-hours`, `/services`, `/availability` | public reads |
+| `/appointments*`, `/turns/*` (assign, start, complete, reassign, status, today), `/checkins/*`, `/checkouts` (POST, GET today), `/technicians` (GET) | staff session or owner session |
+| `/technicians*` (write), `/booking-services*`, `/business-hours` (PUT), `/settings/*`, `/inventory*`, `/income/*`, `/notifications*`, `/callbacks` | owner session only |
+| `/internal/services` | Check-In, internal service token, read-only |
+| `/voice/twilio/*` | Twilio (signature / stream token) |
 
-## Main Endpoints
+Anything not listed is owner-only by default.
 
-### Technicians
+## Local data and tools
 
-- `POST /technicians`
-- `GET /technicians`
-- `GET /technicians/cards`
-- `GET /technicians/{id}`
-- `PUT /technicians/{id}`
-- `DELETE /technicians/{id}`
-
-### Appointments
-
-- `POST /appointments`
-- `GET /appointments`
-- `GET /appointments/{id}`
-- `PUT /appointments/{id}`
-- `DELETE /appointments/{id}`
-
-Preferred technician appointments are included when filtering by `technician_id` if no assigned technician is set.
-
-### Turns And Dispatch
-
-- `POST /turns`
-- `GET /turns`
-- `GET /turns/today`
-- `POST /turns/assign-next`
-- `POST /turns/assign-auto`
-- `POST /turns/assign-preferred`
-- `PUT /turns/{id}/reassign`
-- `PUT /turns/{id}/start`
-- `PUT /turns/{id}/complete`
-- `PUT /turns/{id}/status`
-
-### Checkout
-
-- `POST /checkouts`
-- `GET /checkouts`
-- `GET /checkouts/{id}`
-- `DELETE /checkouts/{id}`
-
-Creating a checkout with a `turn_id` marks that turn as `done`.
-
-### Inventory
-
-- `POST /inventory`
-- `GET /inventory`
-- `GET /inventory/summary`
-- `GET /inventory/{id}`
-- `PUT /inventory/{id}`
-- `DELETE /inventory/{id}`
-
-### Income
-
-- `GET /income/tech`
-- `GET /income/salon`
-
-## Local Data
-
-- App database: `nail_system.db`
-- Test database: `test_owner.db`
+- Database files (`*.db`) are local only and git-ignored.
+- `reset_owner_password.py` resets the owner password on this computer (emergency recovery).

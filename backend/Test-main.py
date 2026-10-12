@@ -5490,3 +5490,37 @@ class TestTechnicianEditKeepsServiceEligibility:
         assert tech in _catalog()["Gel Manicure"]["eligible_technician_ids"]
 
 
+class TestRepositoryHygiene:
+    def test_no_credential_shaped_value_is_in_any_source_doc_or_frontend_file(self):
+        import re as _re
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        pattern = _re.compile(r"sk-[A-Za-z0-9_-]{20,}|AC[0-9a-f]{32}|-----BEGIN [A-Z ]*PRIVATE KEY|[Bb]earer [A-Za-z0-9._-]{30,}")
+        skipped = {"venv", "__pycache__", ".git", "node_modules", ".pytest_cache"}
+        scanned = 0
+        for folder, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if d not in skipped]
+            for name in files:
+                if name.endswith((".py", ".js", ".html", ".css", ".md", ".example", ".txt")) and name not in ("Test-main.py", "owner-ui.test.js"):
+                    scanned += 1
+                    assert not pattern.search(open(os.path.join(folder, name), encoding="utf-8", errors="ignore").read()), name
+        assert scanned > 30
+
+    def test_env_example_has_names_only_and_every_variable_it_lists_is_read_by_the_code(self):
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        names = [line.split("=", 1)[0] for line in open(os.path.join(root, ".env.example"), encoding="utf-8").read().splitlines() if "=" in line and not line.startswith("#")]
+        code = "".join(open(os.path.join(os.path.dirname(__file__), f), encoding="utf-8").read() for f in os.listdir(os.path.dirname(__file__)) if f.endswith(".py") and f != "Test-main.py")
+        for name in names:
+            assert f'"{name}"' in code, name + " is listed in .env.example but never read"
+        text = open(os.path.join(root, ".env.example"), encoding="utf-8").read()
+        assert "replace" in text and not _re_has_real_secret(text)
+
+    def test_gitignore_keeps_databases_environment_files_caches_and_logs_out_of_git(self):
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        ignore = open(os.path.join(root, ".gitignore"), encoding="utf-8").read().splitlines()
+        for pattern in (".env", "*.db", "*.sqlite3", "*.pyc", "__pycache__/", "venv/", ".pytest_cache/", "*.log", "*.pem", ".env.*", "!.env.example"):
+            assert pattern in ignore, pattern
+
+
+def _re_has_real_secret(text):
+    import re as _re
+    return bool(_re.search(r"sk-[A-Za-z0-9_-]{20,}|AC[0-9a-f]{32}", text))
