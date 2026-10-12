@@ -438,11 +438,11 @@ class TestReadOnlyVoiceIntegration:
         instructions = session["instructions"]
         assert "never repeat it" in instructions and "asks whether they are talking to a human or an AI" in instructions
         assert "Do not end ordinary answers" in instructions
-        for trigger in ("asks for the owner or a human", "asks for a callback", "booking, rescheduling, cancelling", "genuine error"):
+        for trigger in ("asks for the owner or a human", "asks for a callback", "rescheduling, cancelling or changing an existing appointment", "genuine error"):
             assert trigger in instructions
         names = {tool["name"] for tool in session["tools"]}
-        assert names == {"get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback"}
-        assert not names.intersection({"create_booking", "reschedule_booking", "cancel_booking", "update_customer"})
+        assert names == {"get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback", "create_booking"}
+        assert not names.intersection({"reschedule_booking", "cancel_booking", "update_customer"})
 
     def test_read_only_tools_prices_privacy_trusted_phone_and_callback_idempotency(self):
         db = SessionLocal()
@@ -2936,7 +2936,7 @@ class TestCallbackAntiSpamAndPrivacy:
         assert db.get(models.VoiceCall, call_id).external_customer_id == 7  # recorded server-side only
         db.close()
 
-    @pytest.mark.parametrize("name", ["create_booking", "reschedule_booking", "cancel_booking", "update_customer", "get_salon_info; create_booking", "", "GET_SALON_INFO", "__import__('os')"])
+    @pytest.mark.parametrize("name", ["reschedule_booking", "cancel_booking", "update_customer", "get_salon_info; create_booking", "", "GET_SALON_INFO", "__import__('os')"])
     def test_tool_name_injection_and_unknown_tools_are_blocked(self, name):
         call_id, *_ = _voice_call("CA-inject", phone="6025551234")
         db = SessionLocal()
@@ -3296,7 +3296,7 @@ class TestToolFailuresMidCall:
         call_id, *_ = _voice_call("CA-mid3")
         db = SessionLocal()
         state = {"stopped": False, "stream_sid": "MZ", "db": db, "db_factory": SessionLocal, "call": db.get(models.VoiceCall, call_id), "config": VoiceConfig.from_env()}
-        ws, ai = _run_openai(state, [self.function_call("create_booking", '{"customer_name": "x"}')])
+        ws, ai = _run_openai(state, [self.function_call("reschedule_booking", '{"customer_name": "x"}')])
         output = json.loads(ai.sent[0]["item"]["output"])
         assert output["ok"] is False and ai.sent[1] == {"type": "response.create"}
         assert db.query(models.Appointment).count() == 0
@@ -3492,7 +3492,7 @@ class TestOwnerServiceCatalog:
 
     def test_voice_allowlist_still_has_no_catalog_or_write_tools(self):
         names = {tool["name"] for tool in voice_tools.READ_ONLY_TOOL_DEFINITIONS}
-        assert names == {"get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback"}
+        assert names == {"get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback", "create_booking"}
 
 
 # ── Internal service catalog contract for Check-In ────────────────────────────
@@ -3550,7 +3550,7 @@ class TestInternalServiceCatalog:
 
     def test_voice_allowlist_and_public_services_unchanged(self):
         names = {tool["name"] for tool in voice_tools.READ_ONLY_TOOL_DEFINITIONS}
-        assert names == {"get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback"}
+        assert names == {"get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback", "create_booking"}
         public = client.get("/services").json()
         assert {"id", "name", "price", "duration_minutes", "is_active"} <= set(public[0])
 
@@ -3787,7 +3787,7 @@ class TestCheckinServiceIdsFlow:
 
     def test_voice_allowlist_unchanged(self):
         assert {tool["name"] for tool in voice_tools.READ_ONLY_TOOL_DEFINITIONS} == {
-            "get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback"}
+            "get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback", "create_booking"}
 
 
 # ── Realtime session gate and failure observability ──────────────────────────
@@ -4045,7 +4045,7 @@ class TestRealtimeSessionGate:
 
     def test_voice_allowlist_and_service_lookup_unchanged(self):
         assert {t["name"] for t in voice_tools.READ_ONLY_TOOL_DEFINITIONS} == {
-            "get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback"}
+            "get_salon_info", "list_services", "get_service_details", "get_available_slots", "identify_customer_candidate", "request_owner_callback", "create_booking"}
         db = SessionLocal()
         call = voice_foundation.create_call(db, caller_phone="6025551234", called_phone="6025559999", call_id="voice-gate")
         facade = voice_foundation.VoiceBookingFacade(db, voice_foundation.VoiceAuthorizationContext(call.id, call.call_id, 0, call.caller_phone_e164, None))
@@ -4090,3 +4090,296 @@ class TestTwilioStreamErrorAndFallback:
         lowered = text.lower()
         for word in ("openai", "quota", "error", "provider"):
             assert word not in lowered
+
+
+# ── Voice appointment creation ────────────────────────────────────────────────
+
+class VoiceBookingEnv:
+    """A live call + facade + one eligible technician; tools are called exactly as the bridge does."""
+
+    def __init__(self, sid, phone="6025551234", techs=("Zed Tech",)):
+        self.db = SessionLocal()
+        self.call = voice_foundation.create_call(self.db, caller_phone=phone, called_phone="6025559999", call_id=sid)
+        self.facade = voice_foundation.VoiceBookingFacade(self.db, voice_foundation.VoiceAuthorizationContext(
+            self.call.id, self.call.call_id, 0, self.call.caller_phone_e164, None))
+        self.facade.caller_turns = 1
+        self.service_id = _catalog()["Gel Manicure"]["id"]
+        self.tech_ids = []
+        for name in techs:
+            tech_id = make_tech(name, specialties="manicure / pedicure, gel").json()["id"]
+            self.tech_ids.append(tech_id)
+        self.day = _booking_day(2)
+        _set_business_hours(self.day, time(9, 0), time(18, 0))
+        for tech_id in self.tech_ids:
+            _set_tech_schedule(tech_id, self.day, time(9, 0), time(18, 0))
+
+    def tool(self, name, **args):
+        self.db.expire_all()
+        return voice_tools.dispatch_voice_tool(self.facade, object(), name, args)
+
+    def offer(self, **extra):
+        slots = self.tool("get_available_slots", date=self.day.isoformat(), service_ids=[self.service_id], **extra)
+        return next(s for s in slots if "T10:00" in s["start"])
+
+    def hear_caller(self):
+        self.facade.caller_turns += 1
+
+    def appointments(self):
+        verify = SessionLocal()
+        try:
+            return verify.query(models.Appointment).count()
+        finally:
+            verify.close()
+
+    def close(self):
+        self.db.close()
+
+
+FAIL = voice_foundation.VoiceFoundationError
+
+
+class TestVoiceAppointmentCreation:
+    def test_full_flow_books_only_after_prepare_new_caller_turn_and_explicit_yes(self):
+        env = VoiceBookingEnv("CA-vb1")
+        slot = env.offer()
+        prepared = env.tool("create_booking", slot_id=slot["slot_id"], customer_name="Maria Lopez")
+        assert prepared["status"] == "confirmation_required" and env.appointments() == 0
+        assert prepared["summary"]["service"] == "Gel Manicure" and prepared["summary"]["customer_name"] == "Maria Lopez"
+        assert prepared["summary"]["time"] == "10:00 AM" and prepared["summary"]["technician"] == "first available technician"
+        env.hear_caller()
+        booked = env.tool("create_booking", slot_id=slot["slot_id"], customer_name="Maria Lopez", caller_confirmation="Yes, please book it")
+        assert booked["status"] == "booked" and booked["service"] == "Gel Manicure" and booked["technician"] == "Zed Tech"
+        assert booked["reference"] and booked["time"] == "10:00 AM" and env.appointments() == 1
+        verify = SessionLocal()
+        appointment = verify.query(models.Appointment).one()
+        assert appointment.customer_phone_e164 == "+16025551234" and appointment.status == "scheduled"
+        assert [s.service_name_snapshot for s in appointment.appointment_services] == ["Gel Manicure"]
+        call = verify.get(models.VoiceCall, env.call.id)
+        assert call.appointment_id == appointment.id and call.outcome == "booked"
+        assert verify.query(models.VoiceCallEvent).filter(models.VoiceCallEvent.event_type == "appointment_created").count() == 1
+        assert verify.query(models.OwnerNotification).filter(models.OwnerNotification.notification_type == "phone_booking").count() == 1
+        verify.close(); env.close()
+
+    def test_nothing_is_booked_before_a_real_confirmation(self):
+        env = VoiceBookingEnv("CA-vb2")
+        slot = env.offer()
+        args = {"slot_id": slot["slot_id"], "customer_name": "Maria Lopez"}
+        with pytest.raises(FAIL, match="Read the booking summary"):
+            env.tool("create_booking", **args, caller_confirmation="yes")  # no prepare yet
+        env.tool("create_booking", **args)
+        with pytest.raises(FAIL, match="Wait for the caller"):
+            env.tool("create_booking", **args, caller_confirmation="yes")  # caller has not spoken since the summary
+        env.hear_caller()
+        for phrase in ("maybe", "yes but wait", "no", "sure, actually no", "uh", "hmm let me think", "I guess", "what time is it", "", "x" * 300):
+            if phrase:
+                with pytest.raises(FAIL):
+                    env.tool("create_booking", **args, caller_confirmation=phrase)
+        assert env.appointments() == 0
+        env.facade.caller_turns = None  # cannot verify the caller's answer -> refuse
+        with pytest.raises(FAIL, match="cannot be verified"):
+            env.tool("create_booking", **args, caller_confirmation="yes")
+        assert env.appointments() == 0
+        env.close()
+
+    def test_only_backend_offered_slot_ids_are_accepted(self):
+        env = VoiceBookingEnv("CA-vb3")
+        other = VoiceBookingEnv("CA-vb3b", techs=())
+        slot = env.offer()
+        for bad in ("deadbeef-0", "nonsense", "", slot["slot_id"].split("-")[0] + "-999", "../" + slot["slot_id"]):
+            with pytest.raises(FAIL, match="Unknown slot_id"):
+                env.tool("create_booking", slot_id=bad, customer_name="Maria Lopez")
+        # a slot offered on a DIFFERENT call is not valid here
+        other.service_id, other.day = env.service_id, env.day
+        foreign = other.offer()
+        with pytest.raises(FAIL, match="Unknown slot_id"):
+            env.tool("create_booking", slot_id=foreign["slot_id"], customer_name="Maria Lopez")
+        # model-invented times/services are simply not part of the tool
+        prepared = env.tool("create_booking", slot_id=slot["slot_id"], customer_name="Maria Lopez", appointment_time="2030-01-01T03:00", service_ids=[1])
+        assert prepared["summary"]["time"] == "10:00 AM" and prepared["summary"]["service"] == "Gel Manicure"
+        assert env.appointments() == 0
+        env.close(); other.close()
+
+    def test_unknown_or_inactive_service_cannot_be_offered(self):
+        env = VoiceBookingEnv("CA-vb4")
+        with pytest.raises(FAIL):
+            env.tool("get_available_slots", date=env.day.isoformat(), service_ids=[999999])
+        client.patch(f"/booking-services/{env.service_id}", json={"is_active": False})
+        with pytest.raises(FAIL):
+            env.tool("get_available_slots", date=env.day.isoformat(), service_ids=[env.service_id])
+        with pytest.raises(FAIL):
+            env.tool("get_available_slots", date=env.day.isoformat(), service_ids=[])
+        env.close()
+
+    def test_service_deactivated_between_summary_and_confirmation_fails_safely(self):
+        env = VoiceBookingEnv("CA-vb5")
+        slot = env.offer()
+        args = {"slot_id": slot["slot_id"], "customer_name": "Maria Lopez"}
+        env.tool("create_booking", **args)
+        client.patch(f"/booking-services/{env.service_id}", json={"is_active": False})
+        env.hear_caller()
+        with pytest.raises(FAIL, match="no longer available"):
+            env.tool("create_booking", **args, caller_confirmation="yes")
+        assert env.appointments() == 0
+        env.close()
+
+    def test_slot_taken_between_summary_and_confirmation_fails_safely_and_other_booking_survives(self):
+        env = VoiceBookingEnv("CA-vb6")
+        slot = env.offer()
+        args = {"slot_id": slot["slot_id"], "customer_name": "Maria Lopez"}
+        env.tool("create_booking", **args)
+        taken = client.post("/appointments", json=_booking_payload(env.tech_ids[0], datetime.fromisoformat(slot["start"]).replace(tzinfo=None), [env.service_id], customer_name="Walk In"))
+        assert taken.status_code == 200
+        env.hear_caller()
+        with pytest.raises(FAIL, match="no longer available"):
+            env.tool("create_booking", **args, caller_confirmation="yes")
+        assert env.appointments() == 1
+        # and a fresh prepare for the taken slot is refused up front
+        with pytest.raises(FAIL, match="no longer available"):
+            env.tool("create_booking", slot_id=slot["slot_id"], customer_name="Other Person")
+        env.close()
+
+    def test_specific_technician_by_name_and_that_technician_becoming_unavailable(self):
+        env = VoiceBookingEnv("CA-vb7", techs=("Zed Tech", "Amy Tech"))
+        slot = env.offer(technician_name="Amy")
+        args = {"slot_id": slot["slot_id"], "customer_name": "Maria Lopez"}
+        assert env.tool("create_booking", **args)["summary"]["technician"] == "Amy Tech"
+        client.post("/appointments", json=_booking_payload(env.tech_ids[1], datetime.fromisoformat(slot["start"]).replace(tzinfo=None), [env.service_id], customer_name="Walk In"))
+        env.hear_caller()
+        with pytest.raises(FAIL, match="no longer available"):
+            env.tool("create_booking", **args, caller_confirmation="yes")  # Zed is free but the caller asked for Amy
+        assert env.appointments() == 1
+        with pytest.raises(FAIL, match="exactly one technician"):
+            env.tool("get_available_slots", date=env.day.isoformat(), service_ids=[env.service_id], technician_name="Nobody")
+        env.close()
+
+    def test_any_technician_uses_authoritative_availability(self):
+        env = VoiceBookingEnv("CA-vb8", techs=("Zed Tech", "Amy Tech"))
+        slot = env.offer()
+        args = {"slot_id": slot["slot_id"], "customer_name": "Maria Lopez"}
+        env.tool("create_booking", **args)
+        env.hear_caller()
+        booked = env.tool("create_booking", **args, caller_confirmation="yes")
+        verify = SessionLocal()
+        appointment = verify.query(models.Appointment).one()
+        assert appointment.technician_id in env.tech_ids and appointment.preferred_technician_id is None
+        assert booked["technician"] in ("Zed Tech", "Amy Tech")
+        verify.close(); env.close()
+
+    def test_duplicate_or_retried_confirmation_creates_exactly_one_appointment(self):
+        env = VoiceBookingEnv("CA-vb9")
+        slot = env.offer()
+        args = {"slot_id": slot["slot_id"], "customer_name": "Maria Lopez"}
+        env.tool("create_booking", **args)
+        env.hear_caller()
+        first = env.tool("create_booking", **args, caller_confirmation="yes")
+        second = env.tool("create_booking", **args, caller_confirmation="yes")
+        third = env.tool("create_booking", **args)  # even a repeated prepare returns the same booking
+        assert first == second == third and env.appointments() == 1
+        verify = SessionLocal()
+        assert verify.query(models.OwnerNotification).filter(models.OwnerNotification.notification_type == "phone_booking").count() == 1
+        verify.close()
+        with pytest.raises(FAIL, match="different details"):
+            env.tool("create_booking", slot_id=slot["slot_id"], customer_name="Someone Else", caller_confirmation="yes")
+        other = [s for s in env.tool("get_available_slots", date=env.day.isoformat(), service_ids=[env.service_id]) if "T11:00" in s["start"]][0]
+        with pytest.raises(FAIL, match="already booked on this call"):
+            env.tool("create_booking", slot_id=other["slot_id"], customer_name="Maria Lopez")
+        assert env.appointments() == 1
+        env.close()
+
+    def test_same_idempotency_key_with_a_different_payload_fails_safely(self):
+        env = VoiceBookingEnv("CA-vb10")
+        slot = env.offer()
+        args = {"slot_id": slot["slot_id"], "customer_name": "Maria Lopez"}
+        env.tool("create_booking", **args)
+        # someone already used this call's booking key for a DIFFERENT request
+        import schemas
+        booking_service.create_booking(env.db, schemas.AppointmentCreate(
+            customer_name="Squatter", customer_phone="6025550999", service_category="x", service_ids=[env.service_id],
+            appointment_time=datetime.fromisoformat(slot["start"]) + timedelta(hours=3), technician_id=env.tech_ids[0],
+            idempotency_key=f"voice:{env.call.call_id}:{slot['slot_id']}"))
+        env.hear_caller()
+        with pytest.raises(FAIL, match="conflicts with an earlier request"):
+            env.tool("create_booking", **args, caller_confirmation="yes")
+        assert env.appointments() == 1
+        env.close()
+
+    def test_ambiguous_customer_details_are_not_guessed(self):
+        env = VoiceBookingEnv("CA-vb11")
+        slot = env.offer()
+        for name in ("", "X", "1234", "<script>", "a" * 61, None):
+            with pytest.raises(FAIL, match="valid customer name"):
+                env.tool("create_booking", slot_id=slot["slot_id"], customer_name=name)
+        env.close()
+        anon = VoiceBookingEnv("CA-vb11b", phone="", techs=("Una Tech",))
+        slot = anon.offer()
+        with pytest.raises(FAIL, match="Caller ID is unavailable"):
+            anon.tool("create_booking", slot_id=slot["slot_id"], customer_name="Maria Lopez")
+        with pytest.raises(FAIL, match="not a valid US number"):
+            anon.tool("create_booking", slot_id=slot["slot_id"], customer_name="Maria Lopez", customer_phone="12")
+        assert anon.tool("create_booking", slot_id=slot["slot_id"], customer_name="Maria Lopez", customer_phone="(480) 555-0100")["status"] == "confirmation_required"
+        anon.hear_caller()
+        anon.tool("create_booking", slot_id=slot["slot_id"], customer_name="Maria Lopez", customer_phone="(480) 555-0100", caller_confirmation="yes")
+        verify = SessionLocal()
+        assert verify.query(models.Appointment).one().customer_phone_e164 == "+14805550100"
+        verify.close(); anon.close()
+
+    def test_trusted_caller_id_wins_over_a_phone_the_model_supplies(self):
+        env = VoiceBookingEnv("CA-vb12")
+        slot = env.offer()
+        args = {"slot_id": slot["slot_id"], "customer_name": "Maria Lopez", "customer_phone": "4805550100"}
+        env.tool("create_booking", **args)
+        env.hear_caller()
+        env.tool("create_booking", **args, caller_confirmation="yes")
+        verify = SessionLocal()
+        assert verify.query(models.Appointment).one().customer_phone_e164 == "+16025551234"
+        verify.close(); env.close()
+
+    def test_backend_failure_never_produces_a_false_success(self, monkeypatch):
+        env = VoiceBookingEnv("CA-vb13")
+        slot = env.offer()
+        args = {"slot_id": slot["slot_id"], "customer_name": "Maria Lopez"}
+        env.tool("create_booking", **args)
+        env.hear_caller()
+
+        def explode(*_a, **_k):
+            raise RuntimeError("database is locked sk-secret")
+        monkeypatch.setattr(booking_service, "create_booking", explode)
+        with pytest.raises(FAIL, match="nothing was booked") as raised:
+            env.tool("create_booking", **args, caller_confirmation="yes")
+        assert "sk-secret" not in str(raised.value) and "RuntimeError" not in str(raised.value)
+        monkeypatch.setattr(booking_service, "create_booking", lambda *_a, **_k: (_ for _ in ()).throw(booking_service.BookingRuleError("outside hours")))
+        with pytest.raises(FAIL, match="no longer available"):
+            env.tool("create_booking", **args, caller_confirmation="yes")
+        env.db.expire_all()
+        assert env.appointments() == 0 and env.db.get(models.VoiceCall, env.call.id).appointment_id is None
+        env.close()
+
+    def test_bridge_counts_caller_utterances_and_hands_the_count_to_the_tools(self, monkeypatch):
+        state = {"stopped": False, "stream_sid": "MZ"}
+        _run_openai(state, [SPEECH, SPEECH, SPEECH])
+        assert state["caller_turns"] == 3
+        call_id, *_ = _voice_call("CA-vb14")
+        seen = {}
+        monkeypatch.setattr(realtime_bridge, "dispatch_voice_tool", lambda facade, gateway, name, arguments: seen.setdefault("turns", facade.caller_turns))
+        call_state = {"db_factory": SessionLocal, "call": SessionLocal().get(models.VoiceCall, call_id), "caller_turns": 4}
+        realtime_bridge._execute_tool_with_own_session(call_state, object(), {"name": "get_salon_info", "arguments": "{}"})
+        assert seen["turns"] == 4
+
+    def test_prompt_requires_confirmation_and_names_no_unsupported_actions_as_available(self):
+        text = realtime_bridge.receptionist_instructions("Test Nails", "America/Phoenix")
+        assert "only after create_booking returns status booked" in text
+        assert "Silence" in text and "NOT a yes" in text and "ONLY times it returns" in text
+        assert "Rescheduling, cancelling or changing an existing appointment is not supported" in text
+
+    def test_allowlist_is_exactly_seven_with_no_reschedule_cancel_or_private_lookup(self):
+        names = {tool["name"] for tool in voice_tools.READ_ONLY_TOOL_DEFINITIONS}
+        assert names == {"get_salon_info", "list_services", "get_service_details", "get_available_slots",
+                         "identify_customer_candidate", "request_owner_callback", "create_booking"}
+        env = VoiceBookingEnv("CA-vb15")
+        for forbidden in ("reschedule_booking", "cancel_booking", "get_appointment", "lookup_appointment", "update_customer",
+                          "assign_technician", "checkout", "update_service", "delete_booking"):
+            with pytest.raises(FAIL):
+                env.tool(forbidden, appointment_id=1)
+        result = env.tool("request_owner_callback", category="reschedule", urgency="normal", summary="Wants to move an appointment")
+        assert result == {"requested": True}  # unsupported requests still go to the owner
+        env.close()

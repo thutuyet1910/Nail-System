@@ -234,6 +234,9 @@ class VoiceBookingFacade:
             raise VoiceFoundationError("Voice authorization context is not backed by a call record")
         self.db = db
         self.context = context
+        # Caller utterances heard so far on this call (set by the realtime bridge); booking
+        # confirmation requires a new utterance after the summary. None = cannot be verified.
+        self.caller_turns: int | None = None
 
     def require_level(self, minimum: int) -> None:
         if self.context.verification_level < minimum:
@@ -275,14 +278,17 @@ class VoiceBookingFacade:
                 "description": service.description, "duration_minutes": service.duration_minutes,
                 "price": float(service.price) if service.price is not None else None}
 
-    def get_available_slots(self, day: str, service_ids: list[int], technician_id: int | None = None) -> list[dict]:
-        import booking_service
-        parsed_day = date.fromisoformat(day)
-        slots = booking_service.generate_available_slots(self.db, parsed_day, service_ids, technician_id=technician_id)
-        return [{
-            "start": slot["start"].isoformat(), "end": slot["end"].isoformat(),
-            "timezone": slot["timezone"], "total_duration_minutes": slot["total_duration_minutes"],
-        } for slot in slots]
+    def get_available_slots(
+        self, day: str, service_ids: list[int], technician_id: int | None = None, technician_name: str | None = None
+    ) -> list[dict]:
+        """Availability for the caller. Every returned slot carries a backend-issued slot_id, recorded
+        on this call, which is the only thing create_booking accepts."""
+        import voice_booking
+        return voice_booking.offer_slots(self, day, service_ids, technician_id, technician_name)
+
+    def create_booking(self, args: dict) -> dict:
+        import voice_booking
+        return voice_booking.create_booking(self, args)
 
     def identify_customer_candidate(self, gateway) -> dict:
         """Level-1 candidate match. Deliberately returns only whether caller ID matched a customer:
