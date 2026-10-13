@@ -1,0 +1,153 @@
+# Nail System - LAN proof of concept reverse proxy (Caddy 2).
+#
+#   LAN listener      0.0.0.0:8080     the Check-In kiosk ONLY (tablet on the salon Wi-Fi)
+#   Loopback listener 127.0.0.1:8081   Owner Dashboard (+ a local preview of the kiosk)
+#
+#   /api/checkin/*  ->  127.0.0.1:8000   Check-In backend  (kiosk allowlist only)
+#   /api/owner/*    ->  127.0.0.1:8001   Owner backend      (loopback listener only)
+#
+# Both backends stay bound to 127.0.0.1. Server-to-server traffic (X-Internal-Service-Token) goes
+# straight between the backends on loopback and never through this proxy.
+#
+# Required environment (absolute paths of the two static frontend folders):
+#   CHECKIN_FRONTEND_DIR   <check-in repo>\frontend
+#   OWNER_FRONTEND_DIR     <owner repo>\frontend
+#
+# Run:  caddy run --config deploy\lan-poc\Caddyfile --adapter caddyfile
+# Check: caddy validate --config deploy\lan-poc\Caddyfile --adapter caddyfile
+#
+# The kiosk allowlist below must match deploy/lan-poc/README.md; a test compares them.
+# No access log is configured on purpose: kiosk URLs contain customer phone numbers.
+{
+	admin off
+	auto_https off
+	persist_config off
+}
+
+(security_headers) {
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
+}
+
+# Forward one allowed kiosk request to the Check-In backend (prefix removed).
+(checkin_backend) {
+	request_body {
+		max_size 64KB
+	}
+	uri strip_prefix /api/checkin
+	reverse_proxy 127.0.0.1:8000 {
+		# a browser must never be able to present itself as the internal service
+		header_up -X-Internal-Service-Token
+		transport http {
+			dial_timeout 3s
+			response_header_timeout 20s
+		}
+	}
+}
+
+# Kiosk pages and the kiosk API allowlist. Used by BOTH listeners; nothing else is ever added here.
+(kiosk) {
+	redir /checkin /checkin/ 308
+
+	handle_path /checkin/* {
+		@assets path / /index.html /config.js /script.js /style.css /translations.js
+		handle @assets {
+			root * "{$CHECKIN_FRONTEND_DIR}"
+			header Cache-Control "no-cache"
+			file_server
+		}
+		handle {
+			respond 404
+		}
+	}
+
+	@kiosk_get {
+		method GET
+		path_regexp ^/api/checkin/(services|queue-status|customers/by-phone/[^/]+|customers/check-in-status/[^/]+)$
+	}
+	handle @kiosk_get {
+		import checkin_backend
+	}
+
+	@kiosk_post {
+		method POST
+		path_regexp ^/api/checkin/(customers/new|customers/check-in/[^/]+|referrals/validate|referrals/apply)$
+	}
+	handle @kiosk_post {
+		import checkin_backend
+	}
+
+	@kiosk_patch {
+		method PATCH
+		path_regexp ^/api/checkin/customers/[^/]+/profile$
+	}
+	handle @kiosk_patch {
+		import checkin_backend
+	}
+}
+
+# ---------------------------------------------------------------------------------------------
+# LAN listener: tablets. Kiosk only. Everything else is a 404.
+# ---------------------------------------------------------------------------------------------
+http://:8080 {
+	bind 0.0.0.0
+	import security_headers
+
+	redir / /checkin/ 302
+
+	# Never reachable from the LAN (explicit, on top of the 404 default below).
+	@private_paths path /owner /owner/* /api/owner /api/owner/* /internal /internal/* /auth /auth/* /voice /voice/* /settings /settings/* /docs /openapi.json
+	handle @private_paths {
+		respond 404
+	}
+
+	import kiosk
+
+	handle {
+		respond 404
+	}
+}
+
+# ---------------------------------------------------------------------------------------------
+# Loopback listener: this computer only.
+# ---------------------------------------------------------------------------------------------
+http://127.0.0.1:8081, http://localhost:8081 {
+	bind 127.0.0.1
+	import security_headers
+
+	redir / /owner/ 302
+	redir /owner /owner/ 308
+
+	# Internal service routes and the Twilio voice routes never go through the browser proxy.
+	@owner_internal path /api/owner/internal /api/owner/internal/* /api/owner/voice /api/owner/voice/*
+	handle @owner_internal {
+		respond 404
+	}
+
+	handle_path /api/owner/* {
+		reverse_proxy 127.0.0.1:8001 {
+			header_up -X-Internal-Service-Token
+			transport http {
+				dial_timeout 3s
+				response_header_timeout 30s
+			}
+		}
+	}
+
+	handle_path /owner/* {
+		root * "{$OWNER_FRONTEND_DIR}"
+		header Cache-Control "no-cache"
+		file_server
+	}
+
+	# Local preview of the kiosk (same allowlist as the LAN listener).
+	import kiosk
+
+	handle {
+		respond 404
+	}
+}

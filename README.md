@@ -7,11 +7,17 @@ Local setup and day-to-day commands: see [DEVELOPMENT.md](DEVELOPMENT.md).
 ## Architecture
 
 ```text
-Browser (frontend/, :5500) ──► Check-In backend (FastAPI, :8000) ──► Owner backend (:8001)
-                                   │   ▲                                 GET /internal/services
-                                   ▼   └──── Owner polls GET /today-checkins
-                              SQLite (nail_system.db)
+Tablet ─► Caddy :8080 (kiosk only) ─► /checkin (static)  +  /api/checkin/<allowlist> ─► Check-In backend (FastAPI, 127.0.0.1:8000) ──► Owner backend (127.0.0.1:8001)
+                                                                                       │   ▲                                 GET /internal/services
+                                                                                       ▼   └──── Owner polls GET /today-checkins
+                                                                                  SQLite (nail_system.db)
 ```
+
+The frontend uses the same-origin path `/api/checkin`, and the reverse proxy decides where it goes, so no host,
+IP address or port is hard-coded in the browser code. Only an explicit allowlist of nine kiosk routes is
+forwarded; the rest of the API (customer lists, birthday reminders, internal routes, docs) is not reachable from
+the LAN. Both backends bind to `127.0.0.1`. See [deploy/lan-poc/README.md](deploy/lan-poc/README.md) for the
+Caddy setup, the allowlist, the privacy risks that remain for this proof of concept, and the real-tablet test.
 
 - The browser only ever talks to the Check-In backend. It never contacts the Owner and never sees the internal token.
 - **The Owner service catalog is authoritative.** Check-In has no service management and no editable catalog. `GET /services` returns the Owner's *active* services (cached briefly in memory, see below).

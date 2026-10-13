@@ -1,4 +1,3 @@
-const API_BASE = "http://127.0.0.1:8000";
 const LOCALE_MAP = { en: "en-US", vi: "vi-VN", es: "es-ES" };
 const LANGUAGE_LABELS = { en: "🌐 EN", vi: "🌐 VI", es: "🌐 ES" };
 const CREATE_CUSTOMER_URL = `${API_BASE}/customers/new`;
