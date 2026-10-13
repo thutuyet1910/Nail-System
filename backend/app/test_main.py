@@ -24,6 +24,7 @@ TEST_DATABASE_URL = "sqlite:///./test_checkin.db"
 engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+from . import kiosk_security
 from . import main as main_module
 from . import models
 from .database import Base, get_db
@@ -49,11 +50,31 @@ client.headers.update({"X-Internal-Service-Token": "test-internal-token"})
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
+def make_paired_device(name="Test tablet"):
+    """Inserts a paired kiosk device and returns its (device id, raw token)."""
+    db = TestingSessionLocal()
+    try:
+        now = kiosk_security.utc_now()
+        device = models.KioskDevice(display_name=name, created_at=now, paired_at=now)
+        db.add(device)
+        db.flush()
+        token, token_hash = kiosk_security.issue_device_token(device.id)
+        device.token_hash = token_hash
+        db.commit()
+        return device.id, token
+    finally:
+        db.close()
+
+
 @pytest.fixture(autouse=True)
 def reset_db():
-    """Fresh tables before every test (the Owner catalog is faked in conftest.py)."""
+    """Fresh tables before every test (the Owner catalog is faked in conftest.py). Every test also starts
+    with one paired kiosk device: the shared `client` is that tablet, just as it also holds the internal token."""
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    kiosk_security.reset_state()
+    _device_id, token = make_paired_device()
+    client.headers.update({kiosk_security.DEVICE_TOKEN_HEADER: token})
     yield
 
 
@@ -200,7 +221,7 @@ class TestCanonicalPhoneNormalization:
         response = client.get("/customers/by-phone/+16025551234")
         assert response.status_code == 200
         assert response.json()["phone_number"] == "6025551234"
-        assert response.json()["phone_e164"] == "+16025551234"
+        assert "phone_e164" not in response.json()  # the kiosk projection is deliberately small
 
     def test_today_checkin_exposes_stable_ids_and_e164(self):
         customer = register("6025551234", "Queue Test", "1990-01-01").json()
@@ -218,10 +239,13 @@ class TestInternalServiceAuthentication:
         assert anonymous.get("/today-checkins").status_code == 401
         assert anonymous.get("/today-checkins", headers={"X-Internal-Service-Token": "wrong"}).status_code == 401
 
-    def test_valid_internal_token_and_public_checkin(self):
+    def test_valid_internal_token_and_a_paired_kiosk(self):
         anonymous = TestClient(app)
         assert anonymous.get("/today-checkins", headers={"X-Internal-Service-Token": "test-internal-token"}).status_code == 200
-        assert anonymous.get("/services").status_code == 200
+        # the kiosk routes need a paired device, never the internal token
+        assert anonymous.get("/services").status_code == 401
+        assert anonymous.get("/services", headers={"X-Internal-Service-Token": "test-internal-token"}).status_code == 401
+        assert client.get("/services").status_code == 200
 
     def test_internal_customer_candidate_is_protected_and_minimal(self):
         customer = register("6025551234", "Private Customer", "1990-01-01", email="private@example.com").json()
@@ -317,7 +341,8 @@ class TestRegistration:
         register("5550000001", "Alice", "1990-03-15")
         r = client.get("/customers/by-phone/5550000001")
         assert r.status_code == 200
-        assert r.json()["full_name"] == "Alice"
+        assert r.json()["first_name"] == "Alice"
+        assert set(r.json()) == {"first_name", "phone_number", "phone_number_formatted", "email_hint", "has_referral_code"}
 
     def test_get_customer_by_phone_not_found_returns_404(self):
         assert client.get("/customers/by-phone/5550000001").status_code == 404
@@ -982,6 +1007,18 @@ class TestVisitHistory:
 # 10. PROFILE UPDATES
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _profile_edit(phone, dob):
+    """Confirm the birth date on file (the second factor) and return the header the edit needs."""
+    r = client.post(f"/customers/{phone}/profile-access", json={"date_of_birth": dob})
+    assert r.status_code == 200, r.text
+    return {"X-Profile-Edit-Token": r.json()["edit_token"]}
+
+
+def _stored(phone):
+    """The full record, read through the internal route (a kiosk never sees it)."""
+    return next(c for c in client.get("/customers").json() if c["phone_number"] == phone)
+
+
 class TestProfileUpdates:
 
     def test_update_phone_success(self):
@@ -1014,19 +1051,21 @@ class TestProfileUpdates:
 
     def test_update_profile_success(self):
         register("5550000001", "Alice", "1990-03-15")
-        r = client.patch("/customers/5550000001/profile", json={
+        r = client.patch("/customers/5550000001/profile", headers=_profile_edit("5550000001", "1990-03-15"), json={
             "full_name": "Alice Smith",
             "phone_number": "5550000001",
             "email": "alice@new.com",
         })
         assert r.status_code == 200
-        data = r.json()
-        assert data["full_name"] == "Alice Smith"
-        assert data["email"] == "alice@new.com"
+        assert r.json()["first_name"] == "Alice"
+        assert r.json()["email_hint"] == "a***@new.com"
+        stored = _stored("5550000001")
+        assert stored["full_name"] == "Alice Smith"
+        assert stored["email"] == "alice@new.com"
 
     def test_update_profile_can_change_phone(self):
         register("5550000001", "Alice", "1990-03-15")
-        r = client.patch("/customers/5550000001/profile", json={
+        r = client.patch("/customers/5550000001/profile", headers=_profile_edit("5550000001", "1990-03-15"), json={
             "full_name": "Alice",
             "phone_number": "5550000099",
         })
@@ -1037,7 +1076,7 @@ class TestProfileUpdates:
         register("5550000001", "Alice", "1990-03-15")
         _set_visit_discount_pending("5550000001")
         checkin("5550000001")
-        client.patch("/customers/5550000001/profile", json={
+        client.patch("/customers/5550000001/profile", headers=_profile_edit("5550000001", "1990-03-15"), json={
             "full_name": "Alice", "phone_number": "5550000099",
         })
         data = client.get("/customers/5550000099/visits").json()
@@ -1047,7 +1086,7 @@ class TestProfileUpdates:
     def test_update_profile_phone_conflict_fails(self):
         register("5550000001", "Alice", "1990-03-15")
         register("5550000002", "Bob", "1992-06-20")
-        r = client.patch("/customers/5550000001/profile", json={
+        r = client.patch("/customers/5550000001/profile", headers=_profile_edit("5550000001", "1990-03-15"), json={
             "full_name": "Alice",
             "phone_number": "5550000002",
         })
@@ -1063,17 +1102,18 @@ class TestProfileUpdates:
 
     def test_update_profile_clears_email_when_empty(self):
         register("5550000001", "Alice", "1990-03-15", email="alice@example.com")
-        r = client.patch("/customers/5550000001/profile", json={
+        r = client.patch("/customers/5550000001/profile", headers=_profile_edit("5550000001", "1990-03-15"), json={
             "full_name": "Alice",
             "phone_number": "5550000001",
             "email": "",
         })
         assert r.status_code == 200
-        assert r.json()["email"] is None
+        assert r.json()["email_hint"] is None
+        assert _stored("5550000001")["email"] is None
 
     def test_update_profile_rejects_bad_email(self):
         register("5550000001", "Alice", "1990-03-15")
-        r = client.patch("/customers/5550000001/profile", json={
+        r = client.patch("/customers/5550000001/profile", headers=_profile_edit("5550000001", "1990-03-15"), json={
             "full_name": "Alice",
             "phone_number": "5550000001",
             "email": "not-an-email",

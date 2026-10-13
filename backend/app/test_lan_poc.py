@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from . import owner_catalog, schemas
 from .main import app
+from .kiosk_security import CLIENT_IP_HEADER
 from .security import INTERNAL_TOKEN_HEADER
 from .test_main import TestingSessionLocal, checkin, client, fake_emails, register, reset_db  # noqa: F401  (autouse fixtures come from test_main)
 
@@ -26,6 +27,8 @@ POC_README = ROOT / "deploy" / "lan-poc" / "README.md"
 
 # The single source of truth for what a tablet may call. The README table and the Caddyfile must match it.
 KIOSK_ALLOWLIST = {
+    ("POST", "/kiosk/pair"),
+    ("POST", "/customers/{phone}/profile-access"),
     ("GET", "/services"),
     ("GET", "/queue-status"),
     ("GET", "/customers/by-phone/{phone}"),
@@ -36,7 +39,7 @@ KIOSK_ALLOWLIST = {
     ("POST", "/referrals/apply"),
     ("PATCH", "/customers/{phone}/profile"),
 }
-KIOSK_ASSETS = {"index.html", "config.js", "script.js", "style.css", "translations.js"}
+KIOSK_ASSETS = {"index.html", "config.js", "kiosk-device.js", "script.js", "style.css", "translations.js"}
 
 
 def _normalise(route: str) -> str:
@@ -80,7 +83,7 @@ class TestRelativeApiBase:
     def test_the_kiosk_calls_a_same_origin_path_and_hard_codes_no_host_or_port(self):
         config = (FRONTEND / "config.js").read_text(encoding="utf-8")
         assert re.search(r'const\s+API_BASE\s*=\s*"/api/checkin"\s*;', config)
-        for name in ("script.js", "config.js", "index.html", "translations.js"):
+        for name in ("script.js", "config.js", "kiosk-device.js", "index.html", "translations.js"):
             text = (FRONTEND / name).read_text(encoding="utf-8")
             assert not re.search(r"127\.0\.0\.1|localhost|0\.0\.0\.0", text), name
             assert not re.search(r":(8000|8001|8080|8081|5500|5501)\b", text), name
@@ -88,14 +91,16 @@ class TestRelativeApiBase:
 
     def test_script_uses_the_base_and_does_not_define_its_own(self):
         script = (FRONTEND / "script.js").read_text(encoding="utf-8")
-        assert not re.search(r"\b(const|let|var)\s+API_BASE\b", script)
-        assert "${API_BASE}" in script
-        assert not re.search(r'fetch\(\s*["\'`]https?://', script)
+        device = (FRONTEND / "kiosk-device.js").read_text(encoding="utf-8")
+        assert not re.search(r"\b(const|let|var)\s+API_BASE\b", script + device)
+        assert "${API_BASE}" in device  # the one place that builds the request URL
+        assert not re.search(r"(?<![A-Za-z.])fetch\(", script), "script.js must go through kioskFetch"
+        assert not re.search(r'fetch\(\s*["\'`]https?://', script + device)
 
     def test_the_page_loads_config_before_the_script_that_uses_it(self):
         html = (FRONTEND / "index.html").read_text(encoding="utf-8")
         order = [m.group(1) for m in re.finditer(r'<script src="([^"]+)"', html)]
-        assert order.index("config.js") < order.index("script.js")
+        assert order.index("config.js") < order.index("kiosk-device.js") < order.index("script.js")
 
     def test_no_browser_file_holds_the_internal_token_or_an_internal_route(self):
         text = "".join(p.read_text(encoding="utf-8") for p in FRONTEND.iterdir() if p.is_file())
@@ -106,12 +111,11 @@ class TestRelativeApiBase:
 class TestKioskAllowlist:
 
     def test_every_call_the_kiosk_makes_is_on_the_allowlist(self):
-        script = (FRONTEND / "script.js").read_text(encoding="utf-8")
+        script = (FRONTEND / "script.js").read_text(encoding="utf-8") + (FRONTEND / "kiosk-device.js").read_text(encoding="utf-8")
         used = set()
-        used |= {m for m in re.findall(r"api\(\s*[`\"'](/[^`\"']*)[`\"']", script)}
-        used |= {m for m in re.findall(r"\$\{API_BASE\}(/[^`\"'?]*)", script)}
-        if "CREATE_CUSTOMER_URL" in script:
-            used |= {m for m in re.findall(r"CREATE_CUSTOMER_URL\s*=\s*`\$\{API_BASE\}(/[^`]*)`", script)}
+        used |= set(re.findall(r"\b(?:api|kioskFetch)\(\s*[`\"'](/[^`\"']*)[`\"']", script))
+        used |= set(re.findall(r"\$\{API_BASE\}(/[^`\"'?]*)", script))
+        used |= set(re.findall(r"CREATE_CUSTOMER_PATH\s*=\s*[`\"'](/[^`\"']*)[`\"']", script))
         used = {_normalise(route) for route in used}
         allowed = {_normalise(route) for _method, route in KIOSK_ALLOWLIST}
         assert used, "found no API calls in script.js: the extraction pattern is stale"
@@ -156,6 +160,12 @@ class TestKioskAllowlist:
         ("POST", "/api/checkin/birthday-reminders/send"),
         ("GET", "/api/checkin/internal/customers/by-phone/6025550101"),
         ("GET", "/api/checkin/docs"),
+        ("GET", "/api/checkin/internal/kiosk/devices"),
+        ("POST", "/api/checkin/internal/kiosk/pairing-codes"),
+        ("POST", "/api/checkin/internal/kiosk/devices/1/revoke"),
+        ("GET", "/api/checkin/kiosk/pair"),
+        ("GET", "/api/checkin/customers/5550000001/profile-access"),
+        ("PATCH", "/api/checkin/customers/5550000001/profile-access"),
         ("GET", "/api/checkin/openapi.json"),
         ("DELETE", "/api/checkin/customers/new"),
         ("PUT", "/api/checkin/customers/6025550101/profile"),
@@ -302,3 +312,70 @@ class TestOwnerContract:
         response = checkin("5550000013", [10])
         assert response.status_code == 404
         assert client.get("/today-checkins", headers={INTERNAL_TOKEN_HEADER: "test-internal-token"}).json()["checkins"] == []
+
+
+class TestCaddyPhaseTwo:
+    """The proxy half of the Phase 2 trust model: identity headers, client address, caching and CSP."""
+
+    def setup_method(self):
+        raw = CADDYFILE.read_text(encoding="utf-8")
+        self.comments = raw
+        self.text = chr(10).join(line for line in raw.splitlines() if not line.strip().startswith("#"))
+        self.backend = _block(self.text, "(checkin_backend)")
+
+    def test_the_real_client_address_is_written_by_the_proxy_replacing_anything_the_client_sent(self):
+        assert re.search(r"header_up\s+X-Kiosk-Client-Ip\s+\{http\.request\.remote\.host\}", self.backend)
+        assert not re.search(r"header_up\s+\+X-Kiosk-Client-Ip", self.backend)  # set, never merged with the client's value
+        assert CLIENT_IP_HEADER == "X-Kiosk-Client-Ip"
+
+    def test_the_device_and_profile_tokens_are_passed_through_but_the_internal_token_is_stripped(self):
+        assert "header_up -X-Internal-Service-Token" in self.backend
+        for passed in ("X-Kiosk-Device-Token", "X-Profile-Edit-Token"):
+            assert not re.search(rf"header_up\s+-{passed}", self.text), passed
+            assert not re.search(rf"request_header\s+-{passed}", self.text), passed
+        assert "Authorization" not in self.text
+
+    def test_the_headers_the_backend_reads_are_the_headers_the_proxy_and_page_use(self):
+        from .kiosk_security import DEVICE_TOKEN_HEADER, PROFILE_TOKEN_HEADER
+        assert DEVICE_TOKEN_HEADER == "X-Kiosk-Device-Token" and PROFILE_TOKEN_HEADER == "X-Profile-Edit-Token"
+        device_js = (FRONTEND / "kiosk-device.js").read_text(encoding="utf-8")
+        assert DEVICE_TOKEN_HEADER in device_js and PROFILE_TOKEN_HEADER in device_js
+
+    def test_kiosk_api_answers_are_never_cached_and_no_access_log_exists(self):
+        assert re.search(r'header\s+>Cache-Control\s+"no-store"', self.backend)
+        assert not re.search(r"^\s*log\b", self.text, re.M)
+
+    def test_the_kiosk_pages_carry_a_strict_content_security_policy(self):
+        policy = re.search(r'Content-Security-Policy\s+"([^"]+)"', self.text).group(1)
+        directives = {part.split()[0]: part.split()[1:] for part in policy.split(";") if part.strip()}
+        assert directives["default-src"] == ["'none'"]
+        assert directives["script-src"] == ["'self'"]          # no inline script, no foreign script
+        assert directives["connect-src"] == ["'self'"]         # the page can only talk to its own origin
+        assert directives["frame-ancestors"] == ["'none'"]
+        assert directives["base-uri"] == ["'none'"] and directives["form-action"] == ["'self'"]
+        assert "'unsafe-eval'" not in policy and "*" not in policy
+        assert set(directives["img-src"]) == {"'self'", "https://images.unsplash.com", "data:"}
+
+    def test_the_policy_is_on_the_kiosk_page_handler_not_on_the_owner_dashboard(self):
+        lan = _block(self.text, "http://:8080")
+        loopback = _block(self.text, "http://127.0.0.1:8081")
+        kiosk = _block(self.text, "(kiosk)")
+        assert "Content-Security-Policy" in kiosk
+        assert "Content-Security-Policy" not in lan and "Content-Security-Policy" not in loopback
+
+    def test_every_kiosk_screen_works_without_inline_script_or_handlers(self):
+        html = (FRONTEND / "index.html").read_text(encoding="utf-8")
+        assert not re.search(r"<script(?![^>]*\bsrc=)[^>]*>", html)
+        assert not re.search(r"\son[a-z]+\s*=", html)
+        assert not re.search(r"javascript:", html, re.I)
+
+    def test_the_owner_listener_never_serves_the_kiosk_policy_or_trusts_the_client_address_header(self):
+        loopback = _block(self.text, "http://127.0.0.1:8081")
+        assert "X-Kiosk-Client-Ip" not in loopback.replace("import kiosk", "")
+
+    def test_names_can_not_carry_markup(self):
+        from .schemas import CustomerCreate
+        for bad in ("<img src=x onerror=alert(1)>", "Bob<script>", "a>b"):
+            with pytest.raises(ValueError):
+                CustomerCreate(full_name=bad, phone_number="5550000001", date_of_birth="1990-01-01")
+        assert CustomerCreate(full_name="Mary-Ann O'Neil", phone_number="5550000001", date_of_birth="1990-01-01").full_name == "Mary-Ann O'Neil"

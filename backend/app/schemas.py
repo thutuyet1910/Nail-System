@@ -23,6 +23,8 @@ def _clean_name(v: str) -> str:
     v = v.strip()
     if not v:
         raise ValueError("Name cannot be empty.")
+    if "<" in v or ">" in v:  # a name is plain text; angle brackets can only be an attempt to inject markup
+        raise ValueError("Name cannot contain < or >.")
     return v
 
 
@@ -197,3 +199,41 @@ class BirthdayReminderResponse(BaseModel):
     date_of_birth: date
     days_until_birthday: int
     birthday_discount_amount: int
+
+
+# ----------------------------
+# Kiosk projections (what a tablet may learn about a customer from a phone number alone)
+# ----------------------------
+class KioskCustomerLookup(BaseModel):
+    """Deliberately small: no birth date, no full name, no id, no referral/discount data. The email is a hint
+    ("j***@gmail.com"), the phone number is the one the visitor just typed."""
+
+    first_name: str
+    phone_number: str
+    phone_number_formatted: str
+    email_hint: Optional[str] = None
+    has_referral_code: bool = False
+
+
+class KioskCheckInStatus(BaseModel):
+    first_name: str
+    already_checked_in_today: bool
+
+
+class ProfileAccessRequest(BaseModel):
+    """The second factor for editing a profile: the birth date on file."""
+
+    model_config = ConfigDict(extra="forbid")
+    date_of_birth: date
+
+
+class KioskEditableProfile(BaseModel):
+    full_name: str
+    phone_number: str
+    email: Optional[str] = None
+
+
+class ProfileAccessResponse(BaseModel):
+    edit_token: str
+    expires_in_seconds: int
+    profile: KioskEditableProfile

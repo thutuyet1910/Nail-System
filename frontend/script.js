@@ -1,6 +1,6 @@
 const LOCALE_MAP = { en: "en-US", vi: "vi-VN", es: "es-ES" };
 const LANGUAGE_LABELS = { en: "🌐 EN", vi: "🌐 VI", es: "🌐 ES" };
-const CREATE_CUSTOMER_URL = `${API_BASE}/customers/new`;
+const CREATE_CUSTOMER_PATH = "/customers/new";
 const CAROUSEL_INTERVAL_MS = 4000;
 const QUEUE_REFRESH_MS = 10000;
 
@@ -19,7 +19,8 @@ const forms = {
   phone: $("phone-form"),
   newCustomer: $("new-customer-form"),
   existingCustomer: $("existing-customer-form"),
-  updateProfile: $("update-profile-form")
+  updateProfile: $("update-profile-form"),
+  verifyProfile: $("verify-profile-form")
 };
 
 const screens = {
@@ -31,6 +32,7 @@ const screens = {
   existingServices: $("existing-customer-service-screen"),
   existingReview: $("existing-customer-review-screen"),
   updateProfile: $("update-profile-screen"),
+  verifyProfile: $("verify-profile-screen"),
   thankYou: $("thank-you-screen")
 };
 
@@ -43,6 +45,7 @@ const existingCustomerProfile = $("existing-customer-profile");
 const phoneInput = $("phone_number");
 const dobInput = $("date_of_birth");
 const updateFullNameInput = $("update_full_name");
+const verifyDobInput = $("verify_dob");
 const updatePhoneInput = $("update_phone");
 const updateEmailInput = $("update_email");
 
@@ -94,6 +97,7 @@ const existingPicker = {
 let currentLanguage = localStorage.getItem("nailSalonLanguage") || "en";
 let phoneNumber = "";
 let existingCustomer = null;
+let profileEditToken = ""; // short-lived proof that the birth date on file was just entered; never shown or stored
 let pendingNewCustomerPayload = null;
 let pendingExistingReferralCode = "";
 let availableServices = [];
@@ -148,19 +152,29 @@ function getErrorMessage(data, fallback = "Something went wrong.") {
   return fallback;
 }
 
-// Calls the API, returns parsed JSON, throws Error(message) on failure
-async function api(path, { method = "GET", body, fallback } = {}) {
-  const options = { method };
+// Calls the API (with this tablet's device token), returns parsed JSON, throws Error(message) on failure.
+// The thrown error carries the HTTP status so callers can show a translated message.
+async function api(path, { method = "GET", body, fallback, headers = {} } = {}) {
+  const options = { method, headers: { ...headers } };
   if (body !== undefined) {
-    options.headers = { "Content-Type": "application/json" };
+    options.headers["Content-Type"] = "application/json";
     options.body = JSON.stringify(body);
   }
 
-  const response = await fetch(`${API_BASE}${path}`, options);
+  const response = await kioskFetch(path, options);
+  if (response.status === 429) throw httpError(t("tooManyRequests"), response.status);
+  if (response.status === 401) throw httpError(t("pairRevoked"), response.status);
+
   const data = await response.json();
 
-  if (!response.ok) throw new Error(getErrorMessage(data, fallback));
+  if (!response.ok) throw httpError(getErrorMessage(data, fallback), response.status);
   return data;
+}
+
+function httpError(message, status) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
 }
 
 // ── Date helpers ──────────────────────────────────────────────
@@ -289,6 +303,7 @@ function resetToMainScreen() {
 
   phoneNumber = "";
   existingCustomer = null;
+  profileEditToken = "";
   pendingNewCustomerPayload = null;
   pendingExistingReferralCode = "";
   lastThankYou = null;
@@ -413,6 +428,7 @@ function formatCheckInTime(dateString) {
 }
 
 async function loadTodayCheckInOrder() {
+  if (!isKioskPaired()) return; // nothing to show until this tablet is paired
   try {
     const data = await api("/queue-status", { fallback: "Failed to load today's check-in order." });
 
@@ -454,17 +470,18 @@ function renderExistingCustomerProfile(customer) {
       <span class="profile-value">${value}</span>
     </div>`;
 
+  // Only what the tablet is allowed to know (first name, the phone number just typed, a masked email), and
+  // always escaped: a name is user-entered text and must never be able to inject markup.
   existingCustomerProfile.innerHTML =
-    row(t("name"), safeText(customer.full_name)) +
-    row(t("phone"), customerPhoneDisplay(customer)) +
-    row(t("email"), safeText(customer.email)) +
-    row(t("birthday"), formatDateForDisplay(customer.date_of_birth));
+    row(t("name"), escapeHtml(safeText(customer.first_name))) +
+    row(t("phone"), escapeHtml(customerPhoneDisplay(customer))) +
+    row(t("email"), escapeHtml(safeText(customer.email_hint)));
 }
 
 function openExistingCustomerScreen() {
   if (!existingCustomer) return;
 
-  existingCustomerName.textContent = tf("welcomeBack", { name: existingCustomer.full_name });
+  existingCustomerName.textContent = tf("welcomeBack", { name: existingCustomer.first_name });
   renderExistingCustomerProfile(existingCustomer);
   showScreen(screens.existing);
   setMessage();
@@ -481,9 +498,9 @@ function showExistingCustomerReview() {
   if (!existingCustomer) return;
 
   const r = review.existing;
-  r.name.textContent = safeText(existingCustomer.full_name);
+  r.name.textContent = safeText(existingCustomer.first_name);
   r.phone.textContent = customerPhoneDisplay(existingCustomer);
-  r.email.textContent = safeText(existingCustomer.email);
+  r.email.textContent = safeText(existingCustomer.email_hint);
   r.referral.textContent = safeText(pendingExistingReferralCode);
   r.services.textContent = formatServiceNamesFromIds(existingPicker.selected);
 
@@ -584,7 +601,7 @@ forms.phone.addEventListener("submit", async (event) => {
   setMessage(t("checkingPhone"));
 
   try {
-    const response = await fetch(`${API_BASE}/customers/by-phone/${encodeURIComponent(phoneNumber)}`);
+    const response = await kioskFetch(`/customers/by-phone/${encodeURIComponent(phoneNumber)}`);
 
     if (response.ok) {
       existingCustomer = await response.json();
@@ -595,7 +612,7 @@ forms.phone.addEventListener("submit", async (event) => {
       );
 
       if (status.already_checked_in_today) {
-        setMessage(tf("alreadyCheckedIn", { name: status.full_name }), "error");
+        setMessage(tf("alreadyCheckedIn", { name: status.first_name }), "error");
         showScreen(screens.phone);
         return;
       }
@@ -673,7 +690,7 @@ if (confirmNewCustomerBtn) {
 
       // 1. Validate referral first
       if (referralCode) {
-        const validateResponse = await fetch(`${API_BASE}/referrals/validate`, {
+        const validateResponse = await kioskFetch(`/referrals/validate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -689,7 +706,7 @@ if (confirmNewCustomerBtn) {
       }
 
       // 2. Create customer only after referral is valid
-      const createResponse = await fetch(CREATE_CUSTOMER_URL, {
+      const createResponse = await kioskFetch(CREATE_CUSTOMER_PATH, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(pendingNewCustomerPayload)
@@ -702,7 +719,7 @@ if (confirmNewCustomerBtn) {
 
       // 3. Apply referral after customer exists
       if (referralCode) {
-        const applyResponse = await fetch(`${API_BASE}/referrals/apply`, {
+        const applyResponse = await kioskFetch(`/referrals/apply`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -722,8 +739,8 @@ if (confirmNewCustomerBtn) {
         });
       }
 
-      const checkInResponse = await fetch(
-        `${API_BASE}/customers/check-in/${encodeURIComponent(phoneNumber)}`,
+      const checkInResponse = await kioskFetch(
+        `/customers/check-in/${encodeURIComponent(phoneNumber)}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -831,7 +848,7 @@ if (confirmExistingCustomerBtn) {
       let referralAppliedMessage = "";
 
       if (pendingExistingReferralCode) {
-        const applyResponse = await fetch(`${API_BASE}/referrals/apply`, {
+        const applyResponse = await kioskFetch(`/referrals/apply`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -851,8 +868,8 @@ if (confirmExistingCustomerBtn) {
         });
       }
 
-      const checkInResponse = await fetch(
-        `${API_BASE}/customers/check-in/${encodeURIComponent(phoneNumber)}`,
+      const checkInResponse = await kioskFetch(
+        `/customers/check-in/${encodeURIComponent(phoneNumber)}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -869,7 +886,7 @@ if (confirmExistingCustomerBtn) {
 
       const birthdayDiscount = checkInData.discounts_applied?.find(d => d.type === "birthday");
       const referralRewardDiscount = checkInData.discounts_applied?.find(d => d.type === "referral");
-      const earnedReferralCode = !existingCustomer?.referral_code && !!checkInData.referral_code;
+      const earnedReferralCode = !existingCustomer?.has_referral_code && !!checkInData.referral_code;
 
       let successText = "";
 
@@ -922,15 +939,55 @@ if (confirmExistingCustomerBtn) {
   });
 }
 
-// Update profile
+// Update profile. A phone number alone is not enough: the birth date on file unlocks the details and returns a
+// short-lived edit token, which the save then needs. Nothing about the customer is shown before that.
 on("update-profile-btn", () => {
-  populateUpdateProfileForm(existingCustomer);
-  showScreen(screens.updateProfile);
+  profileEditToken = "";
+  forms.verifyProfile.reset();
+  showScreen(screens.verifyProfile);
   setMessage();
+  verifyDobInput?.focus();
+});
+
+verifyDobInput?.addEventListener("input", () => {
+  verifyDobInput.value = formatMaskedDate(verifyDobInput.value);
+});
+
+on("cancel-verify-profile-btn", () => {
+  forms.verifyProfile.reset();
+  profileEditToken = "";
+  openExistingCustomerScreen();
+});
+
+forms.verifyProfile.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const dateOfBirth = displayDateToISO(verifyDobInput.value);
+  if (!isValidDOB(dateOfBirth)) return setMessage(t("dobInvalid"), "error");
+
+  try {
+    const data = await api(`/customers/${encodeURIComponent(phoneNumber)}/profile-access`, {
+      method: "POST",
+      body: { date_of_birth: dateOfBirth },
+      fallback: t("verifyFailed")
+    });
+
+    profileEditToken = data.edit_token;
+    forms.verifyProfile.reset(); // the birth date is not kept on screen
+    populateUpdateProfileForm(data.profile);
+    showScreen(screens.updateProfile);
+    setMessage();
+  } catch (error) {
+    forms.verifyProfile.reset();
+    if (error.status === 403) setMessage(t("verifyFailed"), "error");
+    else if (error.status === 429) setMessage(t("verifyLocked"), "error");
+    else setMessage(error.message || t("verifyFailed"), "error");
+  }
 });
 
 on("cancel-update-profile-btn", () => {
   forms.updateProfile.reset();
+  profileEditToken = "";
   openExistingCustomerScreen();
 });
 
@@ -950,18 +1007,27 @@ forms.updateProfile.addEventListener("submit", async (event) => {
     const data = await api(`/customers/${encodeURIComponent(phoneNumber)}/profile`, {
       method: "PATCH",
       body: { full_name, phone_number, email: email || null },
+      headers: { [KIOSK_PROFILE_EDIT_HEADER]: profileEditToken },
       fallback: "Failed to update profile."
     });
 
+    profileEditToken = ""; // one confirmation, one edit
     existingCustomer = data;
     phoneNumber = data.phone_number;
 
     setMessage();
-    showSuccessModal(tf("profileUpdated", { name: data.full_name }));
+    showSuccessModal(tf("profileUpdated", { name: data.first_name }));
 
     forms.updateProfile.reset();
     openExistingCustomerScreen();
   } catch (error) {
+    if (error.status === 403) {
+      profileEditToken = ""; // expired or used: ask for the birth date again
+      forms.updateProfile.reset();
+      showScreen(screens.verifyProfile);
+      setMessage(t("verifyNeeded"), "error");
+      return;
+    }
     setMessage(error.message || "Failed to update profile.", "error");
   }
 });
@@ -1014,6 +1080,15 @@ const TEXT_BINDINGS = [
   ['#update-profile-form button[type="submit"]', "save"],
   ["#cancel-update-profile-btn", "cancel"],
 
+  ["#verify-profile-screen h2", "verifyTitle"],
+  ["#verify-profile-screen .subtitle", "verifyText"],
+  ['#verify-profile-form button[type="submit"]', "continue"],
+  ["#cancel-verify-profile-btn", "cancel"],
+
+  ["#pairing-title", "pairTitle"],
+  ["#pairing-text", "pairText"],
+  ["#pairing-submit", "pairSubmit"],
+
   ["#thank-you-screen h2", "thankYou"],
   ["#back-home-btn", "backHome"],
   ["#birthday-modal h2", "happyBirthday"],
@@ -1051,7 +1126,7 @@ function setLabels(screen, keys) {
 // Re-translates whatever dynamic content is currently on screen
 function refreshDynamicScreens() {
   if (existingCustomer) {
-    existingCustomerName.textContent = tf("welcomeBack", { name: existingCustomer.full_name });
+    existingCustomerName.textContent = tf("welcomeBack", { name: existingCustomer.first_name });
     renderExistingCustomerProfile(existingCustomer);
   }
 
@@ -1123,6 +1198,15 @@ if (languageToggle) {
 
 applyLanguage(currentLanguage);
 startCarousel();
-loadTodayCheckInOrder();
-loadServices();
-setInterval(loadTodayCheckInOrder, QUEUE_REFRESH_MS);
+initKioskDevice(); // no device token yet -> the pairing screen
+document.addEventListener("kiosk:paired", () => {
+  loadServices();
+  loadTodayCheckInOrder();
+});
+if (isKioskPaired()) {
+  loadTodayCheckInOrder();
+  loadServices();
+}
+setInterval(() => {
+  if (isKioskPaired()) loadTodayCheckInOrder();
+}, QUEUE_REFRESH_MS);

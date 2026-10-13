@@ -851,3 +851,48 @@ button:hover {
     max-height: 220px;
   }
 }
+
+/* ── Pairing screen (shown while this tablet has no device token) ───────────── */
+
+.pairing-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(46, 18, 31, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 20px;
+}
+
+.pairing-overlay.hidden {
+  display: none;
+}
+
+.pairing-card {
+  width: 100%;
+  max-width: 460px;
+  text-align: center;
+  background: linear-gradient(180deg, #fff8fb, #ffeaf2);
+  border-radius: 28px;
+  padding: 34px 28px;
+  box-shadow: 0 28px 60px rgba(89, 45, 63, 0.28);
+}
+
+.pairing-icon {
+  font-size: 36px;
+  margin-bottom: 10px;
+}
+
+.pairing-card h2 {
+  color: #b34f78;
+  margin-bottom: 10px;
+  font-size: 30px;
+}
+
+#pairing-code {
+  text-align: center;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-size: 26px;
+}

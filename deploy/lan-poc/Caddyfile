@@ -17,6 +17,12 @@
 # Check: caddy validate --config deploy\lan-poc\Caddyfile --adapter caddyfile
 #
 # The kiosk allowlist below must match deploy/lan-poc/README.md; a test compares them.
+#
+# Client address: the backend cannot see the tablet's address (every request arrives from 127.0.0.1), so this
+# proxy writes it into X-Kiosk-Client-Ip, REPLACING anything the client sent. The Check-In backend believes
+# that header only when the TCP peer is this proxy on loopback (TRUSTED_PROXY_IPS), and uses it for rate limits.
+# The kiosk device token (X-Kiosk-Device-Token) and the profile-edit token (X-Profile-Edit-Token) are passed
+# through untouched; the INTERNAL service token is removed from anything a browser sends.
 # No access log is configured on purpose: kiosk URLs contain customer phone numbers.
 {
 	admin off
@@ -39,9 +45,12 @@
 		max_size 64KB
 	}
 	uri strip_prefix /api/checkin
+	header >Cache-Control "no-store"
 	reverse_proxy 127.0.0.1:8000 {
 		# a browser must never be able to present itself as the internal service
 		header_up -X-Internal-Service-Token
+		# the real tablet address, replacing any value the client supplied
+		header_up X-Kiosk-Client-Ip {http.request.remote.host}
 		transport http {
 			dial_timeout 3s
 			response_header_timeout 20s
@@ -54,10 +63,12 @@
 	redir /checkin /checkin/ 308
 
 	handle_path /checkin/* {
-		@assets path / /index.html /config.js /script.js /style.css /translations.js
+		@assets path / /index.html /config.js /kiosk-device.js /script.js /style.css /translations.js
 		handle @assets {
 			root * "{$CHECKIN_FRONTEND_DIR}"
 			header Cache-Control "no-cache"
+			# no inline script, no foreign script: a stray <script> or onerror= in a customer name cannot run
+			header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https://images.unsplash.com data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 			file_server
 		}
 		handle {
@@ -75,7 +86,7 @@
 
 	@kiosk_post {
 		method POST
-		path_regexp ^/api/checkin/(customers/new|customers/check-in/[^/]+|referrals/validate|referrals/apply)$
+		path_regexp ^/api/checkin/(kiosk/pair|customers/new|customers/check-in/[^/]+|customers/[^/]+/profile-access|referrals/validate|referrals/apply)$
 	}
 	handle @kiosk_post {
 		import checkin_backend

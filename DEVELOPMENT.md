@@ -28,7 +28,7 @@ $env:OWNER_API_BASE = "http://127.0.0.1:8001"
 The Owner backend must use the **same** token value. To set it once (do not paste the value into chat, commits or logs):
 `[Environment]::SetEnvironmentVariable("CHECKIN_INTERNAL_SERVICE_TOKEN", "<long random value>", "User")`, then open a new terminal.
 
-Optional: `SALON_TIMEZONE`, `ALLOWED_ORIGINS`, `DATABASE_URL`, `OWNER_CATALOG_CACHE_SECONDS`, `OWNER_CATALOG_MAX_STALE_SECONDS` (see README).
+Optional: `TRUSTED_PROXY_IPS`, `KIOSK_PAIRING_CODE_MINUTES`, `KIOSK_PROFILE_EDIT_SECONDS`, `SALON_TIMEZONE`, `ALLOWED_ORIGINS`, `DATABASE_URL`, `OWNER_CATALOG_CACHE_SECONDS`, `OWNER_CATALOG_MAX_STALE_SECONDS` (see README).
 
 ## Startup order
 
@@ -38,7 +38,7 @@ Optional: `SALON_TIMEZONE`, `ALLOWED_ORIGINS`, `DATABASE_URL`, `OWNER_CATALOG_CA
    cd <repo>\backend
    venv\Scripts\Activate.ps1
    # load the env vars above in this same terminal
-   uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+   uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --no-proxy-headers
    ```
 3. **Caddy** (serves the kiosk and routes `/api/checkin`; install once with `winget install CaddyServer.Caddy`):
    ```powershell
@@ -51,7 +51,7 @@ Optional: `SALON_TIMEZONE`, `ALLOWED_ORIGINS`, `DATABASE_URL`, `OWNER_CATALOG_CA
    `http://<PC_IP>:8080/checkin/` (see [deploy/lan-poc/README.md](deploy/lan-poc/README.md)).
    The old `python -m http.server 5500` no longer works, because the page now uses same-origin API paths.
 
-Quick check: `http://127.0.0.1:8000/services` should list the Owner's active services. A 503 means the Owner catalog is unreachable or misconfigured.
+Pairing: the kiosk shows a **Pair this tablet** screen until the owner creates a one-time code (Owner Dashboard -> Salon Settings -> Check-In Device) and it is typed in. Every kiosk call then carries the device token, so `http://127.0.0.1:8000/services` needs the `X-Kiosk-Device-Token` header (a plain browser visit answers 401). Step-by-step test: [deploy/lan-poc/README.md](deploy/lan-poc/README.md). A 503 from `/services` means the Owner catalog is unreachable or misconfigured.
 
 ## Tests
 
@@ -61,6 +61,8 @@ python -m pytest app -q                       # full suite
 python -m pytest app\test_owner_catalog.py -q # Owner catalog / service ids
 node --check ..\frontend\script.js
 node --check ..\frontend\translations.js
+node --check ..\frontend\kiosk-device.js
+cd ..; node frontend-tests\kiosk-device.test.js   # pairing, token storage, header injection, revoked tablet
 ```
 
 Tests never touch the network or a real Owner (`app/conftest.py` fakes it) and use `backend\test_checkin.db`.

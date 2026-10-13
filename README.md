@@ -14,9 +14,11 @@ Tablet ─► Caddy :8080 (kiosk only) ─► /checkin (static)  +  /api/checkin
 ```
 
 The frontend uses the same-origin path `/api/checkin`, and the reverse proxy decides where it goes, so no host,
-IP address or port is hard-coded in the browser code. Only an explicit allowlist of nine kiosk routes is
+IP address or port is hard-coded in the browser code. Only an explicit allowlist of eleven kiosk routes is
 forwarded; the rest of the API (customer lists, birthday reminders, internal routes, docs) is not reachable from
-the LAN. Both backends bind to `127.0.0.1`. See [deploy/lan-poc/README.md](deploy/lan-poc/README.md) for the
+the LAN, and every kiosk route except pairing needs the tablet's **device token** (the owner pairs a tablet with a
+one-time code in the Owner Dashboard and can revoke it at any time). Customer lookups return only a first name and a
+masked email; editing a profile needs the birth date on file. Both backends bind to `127.0.0.1`. See [deploy/lan-poc/README.md](deploy/lan-poc/README.md) for the
 Caddy setup, the allowlist, the privacy risks that remain for this proof of concept, and the real-tablet test.
 
 - The browser only ever talks to the Check-In backend. It never contacts the Owner and never sees the internal token.

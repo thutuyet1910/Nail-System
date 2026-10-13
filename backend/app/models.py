@@ -141,3 +141,26 @@ class ReferralUsage(Base):
         foreign_keys=[used_by_customer_id],
         back_populates="referral_usages_as_user",
     )
+
+class KioskDevice(Base):
+    """A paired check-in tablet.
+
+    Created PENDING by the Owner (pairing code), becomes PAIRED when the tablet redeems the code, and
+    ends REVOKED. Only SHA-256 hashes are stored: the pairing code and the device token are shown once and
+    cannot be recovered from the database. The token grants kiosk routes only (see kiosk_security.py).
+    """
+
+    __tablename__ = "kiosk_devices"
+
+    id = Column(Integer, primary_key=True, index=True)
+    display_name = Column(String(80), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    # pairing (cleared as soon as the code is redeemed or the device is revoked)
+    pairing_code_hash = Column(String(64), nullable=True, index=True)
+    pairing_expires_at = Column(DateTime, nullable=True)
+    # device credential (NULL until paired and again after revocation)
+    token_hash = Column(String(64), nullable=True)
+    paired_at = Column(DateTime, nullable=True)
+    last_seen_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    user_agent = Column(String(200), nullable=True)

@@ -1,3 +1,4 @@
+import hmac
 import logging
 import os
 import secrets
@@ -5,7 +6,7 @@ import string
 from contextlib import asynccontextmanager
 from datetime import date
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -19,6 +20,14 @@ from .timeutils import SALON_TZ, now_local, today_local
 from .phone_normalization import normalize_us_phone
 from .owner_catalog import CatalogService, CatalogUnavailable, catalog
 from .security import require_internal_service
+from . import kiosk_security
+from .kiosk import router as kiosk_router
+from .kiosk_security import (
+    PROFILE_TOKEN_HEADER,
+    first_name_of,
+    mask_email,
+    require_kiosk_device,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nail_system")
@@ -402,6 +411,9 @@ app.add_middleware(
 )
 
 
+app.include_router(kiosk_router)
+
+
 @app.get("/")
 def read_root():
     return {"message": "Nail System API is running"}
@@ -411,7 +423,7 @@ def read_root():
 # Services
 # ----------------------------
 @app.get("/services", response_model=list[schemas.ServiceResponse])
-def get_services():
+def get_services(_device=Depends(require_kiosk_device)):
     """Active services from the Owner catalog (cached briefly). The browser never talks to the
     Owner directly and never sees the internal token."""
     return [
@@ -424,7 +436,9 @@ def get_services():
 # Customers
 # ----------------------------
 @app.post("/customers/new", response_model=schemas.CustomerResponse, status_code=201)
-def create_new_customer(customer: schemas.CustomerCreate, db: Session = Depends(get_db)):
+def create_new_customer(
+    customer: schemas.CustomerCreate, db: Session = Depends(get_db), _device=Depends(require_kiosk_device)
+):
     # Name, phone, email and birth date are already cleaned by the schema.
     if _phone_in_use(db, customer.phone_number):
         raise HTTPException(status_code=400, detail="Phone number already exists.")
@@ -466,9 +480,32 @@ def get_customer(customer_id: int, db: Session = Depends(get_db), _=Depends(requ
     return customer
 
 
-@app.get("/customers/by-phone/{phone_number}", response_model=schemas.CustomerResponse)
-def get_customer_by_phone(phone_number: str, db: Session = Depends(get_db)):
-    return _get_customer_or_404(db, phone_number)
+def _kiosk_lookup(customer: models.Customer) -> dict:
+    """What a tablet may know about a returning customer. The full record stays behind the internal routes."""
+    return {
+        "first_name": first_name_of(customer.full_name),
+        "phone_number": customer.phone_number,
+        "phone_number_formatted": schemas.format_phone_display(customer.phone_number),
+        "email_hint": mask_email(customer.email),
+        "has_referral_code": bool(customer.referral_code),
+    }
+
+
+def _lookup_customer_or_404(db: Session, device, phone_number: str) -> models.Customer:
+    """Phone lookups are the enumeration risk: limit their rate and, separately, how many find nobody."""
+    kiosk_security.throttle("lookup", str(device.id))
+    kiosk_security.ensure_not_blocked("lookup_miss", str(device.id))
+    try:
+        return _get_customer_or_404(db, phone_number)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            kiosk_security.record_failure("lookup_miss", str(device.id))
+        raise
+
+
+@app.get("/customers/by-phone/{phone_number}", response_model=schemas.KioskCustomerLookup)
+def get_customer_by_phone(phone_number: str, db: Session = Depends(get_db), device=Depends(require_kiosk_device)):
+    return _kiosk_lookup(_lookup_customer_or_404(db, device, phone_number))
 
 
 @app.get("/internal/customers/by-phone/{phone_number}", response_model=schemas.CustomerCandidateResponse)
@@ -488,6 +525,7 @@ def update_phone_number(
     phone_number: str,
     payload: schemas.UpdatePhoneRequest,
     db: Session = Depends(get_db),
+    _=Depends(require_internal_service),
 ):
     customer = _get_customer_or_404(db, phone_number)
     new_phone = payload.new_phone_number
@@ -510,15 +548,53 @@ def update_phone_number(
     return customer
 
 
-@app.patch("/customers/{phone_number}/profile", response_model=schemas.CustomerResponse)
+@app.post("/customers/{phone_number}/profile-access", response_model=schemas.ProfileAccessResponse)
+def open_profile_for_editing(
+    phone_number: str,
+    payload: schemas.ProfileAccessRequest,
+    db: Session = Depends(get_db),
+    device=Depends(require_kiosk_device),
+):
+    """Second factor for profile edits: the phone number alone is not enough, the birth date on file is
+    also required. Success returns the editable details plus a short-lived edit token bound to this device
+    and this customer; wrong answers are counted per customer and per device and lock the profile for a while."""
+    device_key = str(device.id)
+    kiosk_security.ensure_not_blocked("profile_fail_device", device_key)
+    customer = _lookup_customer_or_404(db, device, phone_number)
+    customer_key = str(customer.id)
+    kiosk_security.ensure_not_blocked("profile_fail_customer", customer_key)
+
+    if not hmac.compare_digest(payload.date_of_birth.isoformat(), customer.date_of_birth.isoformat()):
+        kiosk_security.record_failure("profile_fail_customer", customer_key)
+        kiosk_security.record_failure("profile_fail_device", device_key)
+        raise HTTPException(status_code=403, detail="Those details do not match our records.")
+
+    kiosk_security.clear_failures("profile_fail_customer", customer_key)
+    token, ttl = kiosk_security.issue_profile_token(device.id, customer.id)
+    return {
+        "edit_token": token,
+        "expires_in_seconds": ttl,
+        "profile": {"full_name": customer.full_name, "phone_number": customer.phone_number, "email": customer.email},
+    }
+
+
+@app.patch("/customers/{phone_number}/profile", response_model=schemas.KioskCustomerLookup)
 def update_customer_profile(
     phone_number: str,
     payload: schemas.UpdateCustomerProfileRequest,
     db: Session = Depends(get_db),
+    device=Depends(require_kiosk_device),
+    edit_token: str | None = Header(default=None, alias=PROFILE_TOKEN_HEADER),
 ):
+    """Needs the edit token from /profile-access, so knowing a phone number is never enough."""
+    device_key = str(device.id)
+    kiosk_security.ensure_not_blocked("profile_fail_device", device_key)
     customer = _get_customer_or_404(db, phone_number)
-    new_phone = payload.phone_number
+    if not kiosk_security.profile_token_is_valid(edit_token, device.id, customer.id):
+        kiosk_security.record_failure("profile_fail_device", device_key)
+        raise HTTPException(status_code=403, detail="Please confirm your birth date before editing your profile.")
 
+    new_phone = payload.phone_number
     if new_phone != customer.phone_number and _phone_in_use(db, new_phone):
         raise HTTPException(
             status_code=400,
@@ -531,7 +607,8 @@ def update_customer_profile(
 
     _commit_or_400(db, "That phone number is already in use by another account.")
     db.refresh(customer)
-    return customer
+    kiosk_security.consume_profile_token(edit_token)  # one edit per confirmation
+    return _kiosk_lookup(customer)
 
 
 @app.get("/customers/{phone_number}/visits")
@@ -572,13 +649,12 @@ def get_customer_visits(phone_number: str, db: Session = Depends(get_db), _=Depe
 # ----------------------------
 # Check-in
 # ----------------------------
-@app.get("/customers/check-in-status/{phone_number}")
-def get_check_in_status(phone_number: str, db: Session = Depends(get_db)):
-    customer = _get_customer_or_404(db, phone_number)
+@app.get("/customers/check-in-status/{phone_number}", response_model=schemas.KioskCheckInStatus)
+def get_check_in_status(phone_number: str, db: Session = Depends(get_db), device=Depends(require_kiosk_device)):
+    customer = _lookup_customer_or_404(db, device, phone_number)
 
     return {
-        "phone_number": customer.phone_number,
-        "full_name": customer.full_name,
+        "first_name": first_name_of(customer.full_name),
         "already_checked_in_today": _get_visit_today(db, customer.id) is not None,
     }
 
@@ -616,7 +692,7 @@ def get_today_checkins(db: Session = Depends(get_db), _=Depends(require_internal
 
 
 @app.get("/queue-status")
-def get_public_queue_status(db: Session = Depends(get_db)):
+def get_public_queue_status(db: Session = Depends(get_db), _device=Depends(require_kiosk_device)):
     visits = (
         db.query(models.Visit)
         .options(*_VISIT_SERVICE_LOADS)
@@ -640,6 +716,7 @@ def check_in_customer(
     phone_number: str,
     payload: schemas.CheckInCreate,
     db: Session = Depends(get_db),
+    _device=Depends(require_kiosk_device),
 ):
     customer = _get_customer_or_404(db, phone_number)
 
@@ -736,7 +813,7 @@ def check_in_customer(
     return {
         "message": "Customer checked in successfully.",
         "phone_number": customer.phone_number,
-        "full_name": customer.full_name,
+        "full_name": first_name_of(customer.full_name),  # a tablet shows a first name only
         "visit_count": total_visits,
         "visit_count_cycle": customer.visit_count_cycle,
         "referral_code": customer.referral_code,
@@ -759,9 +836,20 @@ def _get_code_owner_or_404(db: Session, code: str) -> models.Customer:
     return owner
 
 
-@app.post("/referrals/validate")
-def validate_referral_code(payload: schemas.ApplyReferralCodeRequest, db: Session = Depends(get_db)):
-    """Checks a code WITHOUT using it. The customer may not exist yet (new-customer flow)."""
+def _guarded_referral(device, action):
+    """Referral codes can be guessed one by one: limit the rate of calls and, separately, of failed ones."""
+    key = str(device.id)
+    kiosk_security.throttle("referral", key)
+    kiosk_security.ensure_not_blocked("referral_fail", key)
+    try:
+        return action()
+    except HTTPException as exc:
+        if exc.status_code in (400, 404):
+            kiosk_security.record_failure("referral_fail", key)
+        raise
+
+
+def _validate_referral(db: Session, payload: schemas.ApplyReferralCodeRequest) -> dict:
     code = payload.referral_code.strip().upper()
     owner = _get_code_owner_or_404(db, code)
 
@@ -779,8 +867,22 @@ def validate_referral_code(payload: schemas.ApplyReferralCodeRequest, db: Sessio
     return {"valid": True}
 
 
+@app.post("/referrals/validate")
+def validate_referral_code(
+    payload: schemas.ApplyReferralCodeRequest, db: Session = Depends(get_db), device=Depends(require_kiosk_device)
+):
+    """Checks a code WITHOUT using it. The customer may not exist yet (new-customer flow)."""
+    return _guarded_referral(device, lambda: _validate_referral(db, payload))
+
+
 @app.post("/referrals/apply", response_model=schemas.ApplyReferralCodeResponse)
-def apply_referral_code(payload: schemas.ApplyReferralCodeRequest, db: Session = Depends(get_db)):
+def apply_referral_code(
+    payload: schemas.ApplyReferralCodeRequest, db: Session = Depends(get_db), device=Depends(require_kiosk_device)
+):
+    return _guarded_referral(device, lambda: _apply_referral(db, payload))
+
+
+def _apply_referral(db: Session, payload: schemas.ApplyReferralCodeRequest) -> dict:
     customer = _get_customer_or_404(db, payload.phone_number)
 
     if customer.used_referral_code:
@@ -826,9 +928,9 @@ def apply_referral_code(payload: schemas.ApplyReferralCodeRequest, db: Session =
     return {
         "message": f"Referral code accepted successfully. You received {REFERRED_DISCOUNT_PERCENT}% off today.",
         "phone_number": customer.phone_number,
-        "full_name": customer.full_name,
+        "full_name": first_name_of(customer.full_name),
         "used_referral_code": entered_code,
-        "referral_from_customer_name": code_owner.full_name,
+        "referral_from_customer_name": first_name_of(code_owner.full_name),  # never the referrer's full name
         "discount_percent": REFERRED_DISCOUNT_PERCENT,
     }
 

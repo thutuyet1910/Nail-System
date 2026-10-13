@@ -237,6 +237,34 @@
         </div>
       </div>
 
+      <!-- Confirm birth date before editing a profile -->
+      <div id="verify-profile-screen" class="card update-profile-card" style="display: none;">
+        <h2>Confirm It's You</h2>
+        <p class="subtitle update-profile-subtitle">
+          To change your details, please enter your birth date.
+        </p>
+
+        <form id="verify-profile-form" class="update-profile-form" autocomplete="off">
+          <input
+            type="text"
+            id="verify_dob"
+            name="verify_dob"
+            placeholder="MM-DD-YYYY"
+            inputmode="numeric"
+            maxlength="10"
+            autocomplete="off"
+            required
+          />
+
+          <div class="update-profile-actions">
+            <button type="submit">Continue</button>
+            <button type="button" id="cancel-verify-profile-btn" class="secondary-btn">
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+
       <!-- Update profile -->
       <div id="update-profile-screen" class="card update-profile-card" style="display: none;">
         <h2>Update Profile</h2>
@@ -291,6 +319,32 @@
     </section>
   </main>
 
+  <!-- Pairing: shown when this tablet has no device token (or the owner revoked it) -->
+  <div id="pairing-screen" class="pairing-overlay hidden">
+    <div class="pairing-card">
+      <div class="pairing-icon">🔒</div>
+      <h2 id="pairing-title">Pair this tablet</h2>
+      <p id="pairing-text" class="subtitle">
+        Ask the salon owner for a pairing code (Owner Dashboard, Salon Settings, Check-In Device), then enter it below.
+      </p>
+      <form id="pairing-form" autocomplete="off">
+        <input
+          type="text"
+          id="pairing-code"
+          name="pairing-code"
+          placeholder="XXXX-XXXX"
+          autocomplete="off"
+          autocapitalize="characters"
+          spellcheck="false"
+          maxlength="12"
+          required
+        />
+        <button type="submit" id="pairing-submit">Pair tablet</button>
+      </form>
+      <div id="pairing-message" class="message" role="alert"></div>
+    </div>
+  </div>
+
   <div id="birthday-modal" class="birthday-modal hidden">
     <div class="birthday-modal-card">
       <div class="birthday-emoji">🎉🎂🎉</div>
@@ -309,6 +363,7 @@
     </div>
   </div>
   <script src="config.js"></script>
+  <script src="kiosk-device.js"></script>
   <script src="translations.js"></script>
   <script src="script.js"></script>
 </body>
