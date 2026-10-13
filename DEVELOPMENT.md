@@ -57,7 +57,7 @@ Pairing: the kiosk shows a **Pair this tablet** screen until the owner creates a
 
 ```powershell
 cd <repo>\backend
-python -m pytest app -q                       # full suite
+python -m pytest app -q                       # full suite (includes the runtime, backup and wiring tests)
 python -m pytest app\test_owner_catalog.py -q # Owner catalog / service ids
 node --check ..\frontend\script.js
 node --check ..\frontend\translations.js
@@ -66,6 +66,17 @@ cd ..; node frontend-tests\kiosk-device.test.js   # pairing, token storage, head
 ```
 
 Tests never touch the network or a real Owner (`app/conftest.py` fakes it) and use `backend\test_checkin.db`.
+
+## Installed layout, secrets and backups
+
+Everything above is **development mode**. A real install keeps data, settings, secrets, logs and backups under
+`C:\ProgramData\NailSystem` (`NAILSYSTEM_MODE=product`; `.env` is then ignored). Full description: [deploy/RUNTIME.md](deploy/RUNTIME.md).
+From `backend\`:
+
+```powershell
+python app\nailsystem_backup.py backup --app checkin --db .\nail_system.db     # online backup of the dev database (verified)
+python app\nailsystem_backup.py list   --app checkin --db .\nail_system.db
+```
 
 ## Common failures
 

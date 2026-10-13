@@ -23,6 +23,10 @@ from sqlalchemy.orm import sessionmaker
 TEST_DATABASE_URL = "sqlite:///./test_checkin.db"
 engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# The test database gets the same safety settings as the real one (foreign keys ON, WAL, busy timeout), so a test
+# can never pass on data the real database would refuse.
+from . import nailsystem_runtime  # noqa: E402
+nailsystem_runtime.install_sqlite_pragmas(engine)
 
 from . import kiosk_security
 from . import main as main_module

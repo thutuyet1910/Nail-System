@@ -2,7 +2,8 @@
 
 Customer-facing kiosk for a nail salon. Customers enter a phone number, create or confirm their profile, pick services, receive any earned rewards, and join today's live queue. The Owner dashboard (separate repo, `Nail-System-owner-dashboard`) reads that queue to assign technicians.
 
-Local setup and day-to-day commands: see [DEVELOPMENT.md](DEVELOPMENT.md).
+Local setup and day-to-day commands: see [DEVELOPMENT.md](DEVELOPMENT.md). Where a real install keeps its data, settings, secrets, logs
+and backups (and how development differs): [deploy/RUNTIME.md](deploy/RUNTIME.md).
 
 ## Architecture
 

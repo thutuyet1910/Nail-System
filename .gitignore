@@ -14,3 +14,8 @@ venv/
 .pytest_cache/
 pytest-cache-files-*/
 *.log
+# Runtime data never belongs in Git (the installed copy lives under ProgramData)
+*.db-wal
+*.db-shm
+*.db-journal
+backups/

@@ -63,6 +63,9 @@ Owner Dashboard on this PC: <http://127.0.0.1:8081/owner/>. Kiosk preview on thi
 <http://127.0.0.1:8081/checkin/>. The old standalone static servers (ports 5500/5501) no longer work with
 these frontends because the API base is relative; use Caddy for development too.
 
+> This page covers the **development** run (repo-local databases, settings from the environment). The installed layout under
+> `C:\ProgramData\NailSystem` (data, `salon.json`, protected secrets, logs, backups) is described in [../RUNTIME.md](../RUNTIME.md).
+
 ## Find the PC's LAN address
 
 ```powershell

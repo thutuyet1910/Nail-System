@@ -797,8 +797,8 @@ def check_in_customer(
     if customer.visit_count_cycle % LOYALTY_EVERY_N_VISITS == 0:
         customer.visit_discount_pending = True
         logger.info(
-            "%s earned a %s%% loyalty discount (visit #%s)",
-            customer.full_name,
+            "customer %s earned a %s%% loyalty discount (visit #%s)",  # id, not the name: logs carry no personal data
+            customer.id,
             LOYALTY_DISCOUNT_PERCENT,
             customer.visit_count_cycle,
         )
