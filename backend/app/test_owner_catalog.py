@@ -172,3 +172,21 @@ class TestOwnerServiceIds:
         text = "".join(p.read_text(encoding="utf-8") for p in frontend.iterdir() if p.is_file())
         for needle in ("X-Internal-Service-Token", "CHECKIN_INTERNAL_SERVICE_TOKEN", "/internal/services", "OWNER_API_BASE"):
             assert needle not in text
+
+
+class TestHardening:
+
+    def test_more_services_than_owner_accepts_is_rejected(self):
+        register("5550000001", "Alice", "1990-03-15")
+        r = client.post("/customers/check-in/5550000001", json={"selected_service_ids": list(range(1, 22))})
+        assert r.status_code == 422
+
+    def test_redirects_are_not_followed(self):
+        import urllib.request
+        handler = owner_catalog._NoRedirect()
+        req = urllib.request.Request("http://owner.test/internal/services", headers={"X-Internal-Service-Token": "t"})
+        assert handler.redirect_request(req, None, 302, "Found", {}, "http://evil.test/") is None
+
+    def test_non_http_scheme_is_refused(self):
+        with pytest.raises(ValueError):
+            owner_catalog._http_fetch("file:///etc", "t")

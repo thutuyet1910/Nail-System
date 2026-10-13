@@ -15,6 +15,7 @@ import os
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -95,13 +96,25 @@ def parse_catalog(payload) -> list[CatalogService]:
     return services
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow redirects: the internal token must only ever go to the configured Owner URL."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
+
+
 def _http_fetch(base_url: str, token: str) -> object:
+    if urllib.parse.urlparse(base_url).scheme not in ("http", "https"):
+        raise ValueError("OWNER_API_BASE must be an http(s) URL")
     request = urllib.request.Request(
         base_url.rstrip("/") + SERVICES_PATH,
         headers={INTERNAL_TOKEN_HEADER: token, "Accept": "application/json"},
         method="GET",
     )
-    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:  # nosec - configured Owner URL
+    with _opener.open(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:  # nosec - configured Owner URL
         return json.loads(response.read().decode("utf-8"))
 
 

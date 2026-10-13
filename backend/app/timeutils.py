@@ -1,8 +1,9 @@
 
+import os
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-SALON_TZ = ZoneInfo("America/Phoenix")
+SALON_TZ = ZoneInfo(os.getenv("SALON_TIMEZONE") or "America/Phoenix")
 
 
 def now_local() -> datetime:

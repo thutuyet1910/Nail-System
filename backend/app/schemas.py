@@ -121,6 +121,10 @@ class ServiceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+# Owner rejects a whole /today-checkins payload if one visit has more than this many service ids.
+MAX_SERVICES_PER_VISIT = 20
+
+
 class CheckInCreate(BaseModel):
     selected_service_ids: list[int]
 
@@ -130,6 +134,8 @@ class CheckInCreate(BaseModel):
         unique_ids = list(dict.fromkeys(item for item in v if item > 0))
         if not unique_ids:
             raise ValueError("Please select at least one service.")
+        if len(unique_ids) > MAX_SERVICES_PER_VISIT:
+            raise ValueError(f"Please select at most {MAX_SERVICES_PER_VISIT} services.")
         return unique_ids
 
 
