@@ -1,9 +1,8 @@
-from datetime import datetime
-
-from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import relationship
 
 from .database import Base
+from .timeutils import now_local
 
 
 class Customer(Base):
@@ -15,22 +14,26 @@ class Customer(Base):
     email = Column(String, nullable=True)
     date_of_birth = Column(Date, nullable=False)
 
+    # Referral: this customer's own code and the reward they earn from it
     referral_code = Column(String, unique=True, nullable=True)
     referral_count = Column(Integer, default=0, nullable=False)
     referral_discount_percent = Column(Integer, default=10)
     referral_discount_pending = Column(Boolean, default=False, nullable=False)
 
-    birthday_discount_amount = Column(Integer, default=10)
-    birthday_discount_used_month = Column(String, nullable=True)
-
-    visit_count_cycle = Column(Integer, default=0)
-    visit_discount_pending = Column(Boolean, default=False, nullable=False)
-
+    # Referral: the code this customer entered (10% off their visit)
     used_referral_code = Column(String, nullable=True)
     used_referral_from_customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True)
+    referred_discount_pending = Column(Boolean, default=False, nullable=False)
 
+    # Birthday
+    birthday_discount_amount = Column(Integer, default=10)
+    birthday_discount_used_month = Column(String, nullable=True)
     birthday_reminder_sent = Column(Boolean, default=False)
     birthday_reminder_sent_date = Column(Date, nullable=True)
+
+    # Loyalty
+    visit_count_cycle = Column(Integer, default=0, nullable=False)
+    visit_discount_pending = Column(Boolean, default=False, nullable=False)
 
     visits = relationship("Visit", back_populates="customer", cascade="all, delete-orphan")
     referral_usages_as_owner = relationship(
@@ -49,20 +52,32 @@ class Customer(Base):
 
 class Visit(Base):
     __tablename__ = "visits"
+    __table_args__ = (
+        Index("uq_visit_customer_date", "customer_id", "visit_date", unique=True),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
     visit_date = Column(Date, nullable=False)
-    checked_in_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    checked_in_at = Column(DateTime, nullable=False, default=now_local)
     discount_type = Column(String, nullable=True)
     discount_value = Column(Float, nullable=True, default=0)
     discount_label = Column(String, nullable=True)
 
     customer = relationship("Customer", back_populates="visits")
     visit_services = relationship("VisitService", back_populates="visit", cascade="all, delete-orphan")
+    owner_services = relationship(
+        "VisitOwnerService",
+        back_populates="visit",
+        cascade="all, delete-orphan",
+        order_by="VisitOwnerService.id",
+    )
 
 
 class Service(Base):
+    """LEGACY local catalog. No longer used for new selections (Owner booking_services is
+    authoritative); kept only so historical visit_services rows stay readable."""
+
     __tablename__ = "services"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -83,8 +98,32 @@ class VisitService(Base):
     service = relationship("Service", back_populates="visit_services")
 
 
+class VisitOwnerService(Base):
+    """A service chosen at check-in, keyed by the Owner's stable BookingService id.
+
+    `service_name` is the display name at check-in time (a snapshot for history); integrations
+    should use `owner_service_id`. Legacy visits have rows in `visit_services` instead.
+    """
+
+    __tablename__ = "visit_owner_services"
+    __table_args__ = (
+        Index("uq_visit_owner_service", "visit_id", "owner_service_id", unique=True),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    visit_id = Column(Integer, ForeignKey("visits.id"), nullable=False, index=True)
+    owner_service_id = Column(Integer, nullable=False)
+    service_name = Column(String, nullable=False)
+
+    visit = relationship("Visit", back_populates="owner_services")
+
+
 class ReferralUsage(Base):
     __tablename__ = "referral_usages"
+    __table_args__ = (
+        # A customer can only ever use one referral code.
+        Index("uq_referral_used_by", "used_by_customer_id", unique=True),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     code = Column(String, nullable=False)

@@ -1,153 +1,189 @@
-const phoneForm = document.getElementById("phone-form");
-const customerForm = document.getElementById("new-customer-form");
-const existingCustomerForm = document.getElementById("existing-customer-form");
-const messageBox = document.getElementById("message");
-
-const checkinOrderList = document.getElementById("checkin-order-list");
-const phoneScreen = document.getElementById("phone-screen");
-const formScreen = document.getElementById("form-screen");
-const existingScreen = document.getElementById("existing-screen");
-const thankYouScreen = document.getElementById("thank-you-screen");
-const thankYouMessage = document.getElementById("thank-you-message");
-const existingCustomerName = document.getElementById("existing-customer-name");
-
-const birthdayModal = document.getElementById("birthday-modal");
-const birthdayModalText = document.getElementById("birthday-modal-text");
-const closeBirthdayModalBtn = document.getElementById("close-birthday-modal");
-const backHomeBtn = document.getElementById("back-home-btn");
-
-const successModal = document.getElementById("success-modal");
-const successModalText = document.getElementById("success-modal-text");
-const closeSuccessModalBtn = document.getElementById("close-success-modal");
-
-const carouselImage = document.getElementById("carousel-image");
-const adBadge = document.getElementById("ad-badge");
-const adTitle = document.getElementById("ad-title");
-const adText = document.getElementById("ad-text");
-const phoneInput = document.getElementById("phone_number");
-
-const existingCustomerProfile = document.getElementById("existing-customer-profile");
-
-const newCustomerServiceScreen = document.getElementById("new-customer-service-screen");
-const newServiceSearchInput = document.getElementById("new-service-search");
-const newServiceList = document.getElementById("new-service-list");
-const backToNewCustomerFormBtn = document.getElementById("back-to-new-customer-form-btn");
-const continueToNewReviewBtn = document.getElementById("continue-to-new-review-btn");
-
-const newCustomerReviewScreen = document.getElementById("new-customer-review-screen");
-const reviewFullName = document.getElementById("review-full-name");
-const reviewDob = document.getElementById("review-dob");
-const reviewEmail = document.getElementById("review-email");
-const reviewReferralCode = document.getElementById("review-referral-code");
-const reviewServices = document.getElementById("review-services");
-const editNewCustomerBtn = document.getElementById("edit-new-customer-btn");
-const confirmNewCustomerBtn = document.getElementById("confirm-new-customer-btn");
-
-const existingCustomerServiceScreen = document.getElementById("existing-customer-service-screen");
-const existingServiceSearchInput = document.getElementById("existing-service-search");
-const existingServiceList = document.getElementById("existing-service-list");
-const backToExistingCustomerBtn = document.getElementById("back-to-existing-customer-btn");
-const continueToExistingReviewBtn = document.getElementById("continue-to-existing-review-btn");
-
-const existingCustomerReviewScreen = document.getElementById("existing-customer-review-screen");
-const existingReviewFullName = document.getElementById("existing-review-full-name");
-const existingReviewPhone = document.getElementById("existing-review-phone");
-const existingReviewEmail = document.getElementById("existing-review-email");
-const existingReviewReferralCode = document.getElementById("existing-review-referral-code");
-const existingReviewServices = document.getElementById("existing-review-services");
-const editExistingCustomerBtn = document.getElementById("edit-existing-customer-btn");
-const confirmExistingCustomerBtn = document.getElementById("confirm-existing-customer-btn");
-
-const updateProfileScreen = document.getElementById("update-profile-screen");
-const updateProfileForm = document.getElementById("update-profile-form");
-const updateProfileBtn = document.getElementById("update-profile-btn");
-const cancelUpdateProfileBtn = document.getElementById("cancel-update-profile-btn");
-const updateFullNameInput = document.getElementById("update_full_name");
-const updatePhoneInput = document.getElementById("update_phone");
-const updateEmailInput = document.getElementById("update_email");
-
-const dobInput = document.getElementById("date_of_birth");
-
 const API_BASE = "http://127.0.0.1:8000";
+const LOCALE_MAP = { en: "en-US", vi: "vi-VN", es: "es-ES" };
+const LANGUAGE_LABELS = { en: "🌐 EN", vi: "🌐 VI", es: "🌐 ES" };
 const CREATE_CUSTOMER_URL = `${API_BASE}/customers/new`;
+const CAROUSEL_INTERVAL_MS = 4000;
+const QUEUE_REFRESH_MS = 10000;
 
+const CAROUSEL_SLIDES = [
+  { key: "slide1", image: "https://images.unsplash.com/photo-1604654894610-df63bc536371?auto=format&fit=crop&w=1400&q=80" },
+  { key: "slide2", image: "https://images.unsplash.com/photo-1522337660859-02fbefca4702?auto=format&fit=crop&w=1400&q=80" },
+  { key: "slide3", image: "https://images.unsplash.com/photo-1519014816548-bf5fe059798b?auto=format&fit=crop&w=1400&q=80" },
+  { key: "slide4", image: "https://images.unsplash.com/photo-1610992015732-2449b76344bc?auto=format&fit=crop&w=1400&q=80" }
+];
+
+// ── DOM references ────────────────────────────────────────────
+
+const $ = (id) => document.getElementById(id);
+
+const forms = {
+  phone: $("phone-form"),
+  newCustomer: $("new-customer-form"),
+  existingCustomer: $("existing-customer-form"),
+  updateProfile: $("update-profile-form")
+};
+
+const screens = {
+  phone: $("phone-screen"),
+  newForm: $("form-screen"),
+  newServices: $("new-customer-service-screen"),
+  newReview: $("new-customer-review-screen"),
+  existing: $("existing-screen"),
+  existingServices: $("existing-customer-service-screen"),
+  existingReview: $("existing-customer-review-screen"),
+  updateProfile: $("update-profile-screen"),
+  thankYou: $("thank-you-screen")
+};
+
+const messageBox = $("message");
+const checkinOrderList = $("checkin-order-list");
+const thankYouMessage = $("thank-you-message");
+const existingCustomerName = $("existing-customer-name");
+const existingCustomerProfile = $("existing-customer-profile");
+
+const phoneInput = $("phone_number");
+const dobInput = $("date_of_birth");
+const updateFullNameInput = $("update_full_name");
+const updatePhoneInput = $("update_phone");
+const updateEmailInput = $("update_email");
+
+const birthdayModal = $("birthday-modal");
+const birthdayModalText = $("birthday-modal-text");
+const successModal = $("success-modal");
+const successModalText = $("success-modal-text");
+
+const carousel = {
+  image: $("carousel-image"),
+  badge: $("ad-badge"),
+  title: $("ad-title"),
+  text: $("ad-text")
+};
+
+const review = {
+  newCustomer: {
+    name: $("review-full-name"),
+    dob: $("review-dob"),
+    email: $("review-email"),
+    referral: $("review-referral-code"),
+    services: $("review-services")
+  },
+  existing: {
+    name: $("existing-review-full-name"),
+    phone: $("existing-review-phone"),
+    email: $("existing-review-email"),
+    referral: $("existing-review-referral-code"),
+    services: $("existing-review-services")
+  }
+};
+
+const selectedNewServiceIds = [];
+const selectedExistingServiceIds = [];
+
+const newPicker = {
+  list: $("new-service-list"),
+  search: $("new-service-search"),
+  selected: selectedNewServiceIds
+};
+const existingPicker = {
+  list: $("existing-service-list"),
+  search: $("existing-service-search"),
+  selected: selectedExistingServiceIds
+};
+
+// ── State ─────────────────────────────────────────────────────
+
+let currentLanguage = localStorage.getItem("nailSalonLanguage") || "en";
 let phoneNumber = "";
 let existingCustomer = null;
 let pendingNewCustomerPayload = null;
 let pendingExistingReferralCode = "";
-
 let availableServices = [];
-let selectedNewServiceIds = [];
-let selectedExistingServiceIds = [];
-
-const carouselSlides = [
-  {
-    image: "https://images.unsplash.com/photo-1604654894610-df63bc536371?auto=format&fit=crop&w=1400&q=80",
-    badge: "Referral Reward",
-    title: "Get 10% Off With Referral",
-    text: "Use a valid referral code and enjoy 10% off your salon services."
-  },
-  {
-    image: "https://images.unsplash.com/photo-1522337660859-02fbefca4702?auto=format&fit=crop&w=1400&q=80",
-    badge: "Birthday Special",
-    title: "Birthday Reward",
-    text: "Celebrate your birthday with a special $10 off on your birthday."
-  },
-  {
-    image: "https://images.unsplash.com/photo-1519014816548-bf5fe059798b?auto=format&fit=crop&w=1400&q=80",
-    badge: "Salon Rewards",
-    title: "Enjoy Exclusive Benefits",
-    text: "Visit more often and unlock special salon rewards and referral benefits."
-  },
-  {
-    image: "https://images.unsplash.com/photo-1610992015732-2449b76344bc?auto=format&fit=crop&w=1400&q=80",
-    badge: "Relax & Enjoy",
-    title: "Check In and Relax",
-    text: "Check in quickly, take a seat, and enjoy a relaxing salon experience."
-  }
-];
-
+let lastThankYou = null;
 let carouselIndex = 0;
 
-// ── Helpers ───────────────────────────────────────────────────
+// ── Translation helpers ───────────────────────────────────────
+
+function t(key) {
+  return translations[currentLanguage]?.[key] || translations.en[key] || key;
+}
+
+function tf(key, vars = {}) {
+  return t(key).replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? "");
+}
+
+// ── Generic helpers ───────────────────────────────────────────
 
 function formatPhone(value) {
-  const digits = value.replace(/\D/g, "").slice(0, 10);
-
-  if (digits.length === 0) return "";
-  if (digits.length <= 3) return `(${digits}`;
-  if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
-  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  const d = value.replace(/\D/g, "").slice(0, 10);
+  if (d.length === 0) return "";
+  if (d.length <= 3) return `(${d}`;
+  if (d.length <= 6) return `(${d.slice(0, 3)}) ${d.slice(3)}`;
+  return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
 }
 
-function rawDigits(value) {
-  return value.replace(/\D/g, "");
-}
+const rawDigits = (value) => value.replace(/\D/g, "");
 
 function safeText(value) {
-  return value && String(value).trim() ? value : "Not provided";
+  return value && String(value).trim() ? value : t("notProvided");
 }
+
+function setMessage(text = "", type = "") {
+  messageBox.textContent = text;
+  messageBox.className = type ? `message ${type}` : "message";
+}
+
+function getErrorMessage(data, fallback = "Something went wrong.") {
+  if (!data) return fallback;
+  if (typeof data === "string") return data;
+
+  const { detail } = data;
+
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => (typeof item === "string" ? item : item?.msg || JSON.stringify(item)))
+      .join(", ");
+  }
+  if (typeof detail === "string") return detail;
+  if (detail && typeof detail === "object") return detail.msg || JSON.stringify(detail);
+
+  return fallback;
+}
+
+// Calls the API, returns parsed JSON, throws Error(message) on failure
+async function api(path, { method = "GET", body, fallback } = {}) {
+  const options = { method };
+  if (body !== undefined) {
+    options.headers = { "Content-Type": "application/json" };
+    options.body = JSON.stringify(body);
+  }
+
+  const response = await fetch(`${API_BASE}${path}`, options);
+  const data = await response.json();
+
+  if (!response.ok) throw new Error(getErrorMessage(data, fallback));
+  return data;
+}
+
+// ── Date helpers ──────────────────────────────────────────────
 
 function getTodayISODate() {
   const today = new Date();
-  const year = today.getFullYear();
   const month = String(today.getMonth() + 1).padStart(2, "0");
   const day = String(today.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return `${today.getFullYear()}-${month}-${day}`;
 }
 
 function formatDateForDisplay(dateValue) {
-  if (!dateValue) return "Not provided";
+  if (!dateValue) return t("notProvided");
 
   const parts = String(dateValue).split("-");
-  if (parts.length !== 3) return "Not provided";
+  if (parts.length !== 3) return t("notProvided");
 
   const [year, month, day] = parts.map(Number);
   const date = new Date(year, month - 1, day);
+  if (Number.isNaN(date.getTime())) return t("notProvided");
 
-  if (Number.isNaN(date.getTime())) return "Not provided";
-
-  return date.toLocaleDateString([], {
+  return date.toLocaleDateString(LOCALE_MAP[currentLanguage] || "en-US", {
     year: "numeric",
     month: "long",
     day: "numeric"
@@ -155,55 +191,30 @@ function formatDateForDisplay(dateValue) {
 }
 
 function isValidDOB(dateString) {
-  if (!dateString || typeof dateString !== "string") return false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString || "")) return false;
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString)) return false;
-
-  const [yearStr, monthStr, dayStr] = dateString.split("-");
-  const year = Number(yearStr);
-  const month = Number(monthStr);
-  const day = Number(dayStr);
-
-  if (yearStr.length !== 4) return false;
+  const [year, month, day] = dateString.split("-").map(Number);
   if (year < 1900 || year > new Date().getFullYear()) return false;
-  if (month < 1 || month > 12) return false;
-  if (day < 1 || day > 31) return false;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
 
   const date = new Date(year, month - 1, day);
-
-  if (
-    date.getFullYear() !== year ||
-    date.getMonth() + 1 !== month ||
-    date.getDate() !== day
-  ) {
+  if (date.getFullYear() !== year || date.getMonth() + 1 !== month || date.getDate() !== day) {
     return false;
   }
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  date.setHours(0, 0, 0, 0);
-
-  if (date > today) return false;
-
-  return true;
-}
-
-function setDOBLimits() {
-  if (!dobInput) return;
-
-  dobInput.max = getTodayISODate();
-  dobInput.min = "1900-01-01";
-  dobInput.setAttribute("maxlength", "10");
-  dobInput.setAttribute("inputmode", "numeric");
+  return date <= today;
 }
 
 function formatMaskedDate(value) {
-  const digits = String(value || "").replace(/\D/g, "").slice(0, 8);
-  if (digits.length <= 2) return digits;
-  if (digits.length <= 4) return `${digits.slice(0, 2)}-${digits.slice(2)}`;
-  return `${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4)}`;
+  const d = String(value || "").replace(/\D/g, "").slice(0, 8);
+  if (d.length <= 2) return d;
+  if (d.length <= 4) return `${d.slice(0, 2)}-${d.slice(2)}`;
+  return `${d.slice(0, 2)}-${d.slice(2, 4)}-${d.slice(4)}`;
 }
 
+// MM-DD-YYYY -> YYYY-MM-DD (passes ISO through, returns "" if invalid format)
 function displayDateToISO(value) {
   if (/^\d{4}-\d{2}-\d{2}$/.test(value || "")) return value;
   if (!/^\d{2}-\d{2}-\d{4}$/.test(value || "")) return "";
@@ -211,24 +222,17 @@ function displayDateToISO(value) {
   return `${year}-${month}-${day}`;
 }
 
-function limitDOBYearValue() {
-  if (!dobInput?.value) return;
-  dobInput.value = formatMaskedDate(dobInput.value);
-}
-
 function validateDOBInput() {
   if (!dobInput) return true;
 
-  limitDOBYearValue();
-  const value = displayDateToISO(dobInput.value);
+  if (dobInput.value) dobInput.value = formatMaskedDate(dobInput.value);
 
   if (!dobInput.value) {
-    dobInput.setCustomValidity("Please select your date of birth.");
+    dobInput.setCustomValidity(t("dobRequired"));
     return false;
   }
-
-  if (!isValidDOB(value)) {
-    dobInput.setCustomValidity("Please enter a valid date of birth with a 4-digit year.");
+  if (!isValidDOB(displayDateToISO(dobInput.value))) {
+    dobInput.setCustomValidity(t("dobInvalid"));
     return false;
   }
 
@@ -236,208 +240,12 @@ function validateDOBInput() {
   return true;
 }
 
-function getErrorMessage(data, fallback = "Something went wrong.") {
-  if (!data) return fallback;
+// ── Screens & modals ──────────────────────────────────────────
 
-  if (typeof data === "string") return data;
-
-  if (Array.isArray(data.detail)) {
-    return data.detail
-      .map(item => {
-        if (typeof item === "string") return item;
-        if (item?.msg) return item.msg;
-        return JSON.stringify(item);
-      })
-      .join(", ");
-  }
-
-  if (typeof data.detail === "string") return data.detail;
-
-  if (data.detail && typeof data.detail === "object") {
-    if (data.detail.msg) return data.detail.msg;
-    return JSON.stringify(data.detail);
-  }
-
-  return fallback;
+function showScreen(screen) {
+  Object.values(screens).forEach((s) => (s.style.display = "none"));
+  screen.style.display = "block";
 }
-
-function getServiceNameById(id) {
-  const service = availableServices.find(item => item.id === id);
-  return service ? service.name : `Service ${id}`;
-}
-
-function formatServiceNamesFromIds(ids) {
-  if (!ids || ids.length === 0) return "No services selected";
-  return ids.map(getServiceNameById).join(", ");
-}
-
-// ── Services ──────────────────────────────────────────────────
-
-async function loadServices() {
-  try {
-    const response = await fetch(`${API_BASE}/services`);
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(getErrorMessage(data, "Failed to load services."));
-    }
-
-    availableServices = Array.isArray(data) ? data : [];
-
-    renderServiceList(newServiceList, selectedNewServiceIds, newServiceSearchInput?.value || "");
-    renderServiceList(existingServiceList, selectedExistingServiceIds, existingServiceSearchInput?.value || "");
-  } catch (error) {
-    console.error("Failed to load services:", error);
-    if (newServiceList) {
-      newServiceList.innerHTML = `<p class="queue-empty">Unable to load services.</p>`;
-    }
-    if (existingServiceList) {
-      existingServiceList.innerHTML = `<p class="queue-empty">Unable to load services.</p>`;
-    }
-  }
-}
-
-function renderServiceList(container, selectedServiceIds, searchTerm = "") {
-  if (!container) return;
-
-  const normalizedSearch = searchTerm.trim().toLowerCase();
-
-  const filteredServices = availableServices.filter(service =>
-    service.name.toLowerCase().includes(normalizedSearch)
-  );
-
-  if (filteredServices.length === 0) {
-    container.innerHTML = `<p class="queue-empty">No matching services found.</p>`;
-    return;
-  }
-
-  container.innerHTML = filteredServices
-    .map(service => {
-      const checked = selectedServiceIds.includes(service.id) ? "checked" : "";
-      const safeId = `service_${service.id}`;
-      return `
-        <label class="service-option" for="${container.id}_${safeId}">
-          <input
-            type="checkbox"
-            id="${container.id}_${safeId}"
-            value="${service.id}"
-            ${checked}
-          />
-          <span>${service.name}</span>
-        </label>
-      `;
-    })
-    .join("");
-}
-
-function toggleServiceSelection(serviceId, selectedServiceIdsRef) {
-  const index = selectedServiceIdsRef.indexOf(serviceId);
-
-  if (index >= 0) {
-    selectedServiceIdsRef.splice(index, 1);
-  } else {
-    selectedServiceIdsRef.push(serviceId);
-  }
-}
-
-function bindServiceListSelection(container, getSelectedServiceIds, searchInput) {
-  if (!container) return;
-
-  container.addEventListener("change", (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLInputElement)) return;
-    if (target.type !== "checkbox") return;
-
-    const selectedServiceIdsRef = getSelectedServiceIds();
-    const serviceId = Number(target.value);
-
-    if (!Number.isInteger(serviceId) || serviceId <= 0) return;
-
-    toggleServiceSelection(serviceId, selectedServiceIdsRef);
-
-    renderServiceList(
-      container,
-      selectedServiceIdsRef,
-      searchInput ? searchInput.value : ""
-    );
-  });
-}
-
-function showNewCustomerServiceScreen() {
-  renderServiceList(newServiceList, selectedNewServiceIds, newServiceSearchInput?.value || "");
-  hideAllMainScreens();
-  newCustomerServiceScreen.style.display = "block";
-  messageBox.textContent = "";
-  messageBox.className = "message";
-}
-
-function showExistingCustomerServiceScreen() {
-  renderServiceList(existingServiceList, selectedExistingServiceIds, existingServiceSearchInput?.value || "");
-  hideAllMainScreens();
-  existingCustomerServiceScreen.style.display = "block";
-  messageBox.textContent = "";
-  messageBox.className = "message";
-}
-
-function showNewCustomerReview(payload) {
-  pendingNewCustomerPayload = payload;
-
-  reviewFullName.textContent = safeText(payload.full_name);
-  reviewDob.textContent = formatDateForDisplay(payload.date_of_birth);
-  reviewEmail.textContent = safeText(payload.email);
-  reviewReferralCode.textContent = safeText(payload.referral_code);
-  reviewServices.textContent = formatServiceNamesFromIds(selectedNewServiceIds);
-
-  hideAllMainScreens();
-  newCustomerReviewScreen.style.display = "block";
-
-  messageBox.textContent = "";
-  messageBox.className = "message";
-}
-
-function showExistingCustomerReview() {
-  if (!existingCustomer) return;
-
-  existingReviewFullName.textContent = safeText(existingCustomer.full_name);
-  existingReviewPhone.textContent = safeText(
-    existingCustomer.phone_number_formatted || formatPhone(existingCustomer.phone_number || "")
-  );
-  existingReviewEmail.textContent = safeText(existingCustomer.email);
-  existingReviewReferralCode.textContent = safeText(pendingExistingReferralCode);
-  existingReviewServices.textContent = formatServiceNamesFromIds(selectedExistingServiceIds);
-
-  hideAllMainScreens();
-  existingCustomerReviewScreen.style.display = "block";
-
-  messageBox.textContent = "";
-  messageBox.className = "message";
-}
-
-// ── Carousel ──────────────────────────────────────────────────
-
-function renderSlide(index) {
-  if (!carouselImage) return;
-
-  const slide = carouselSlides[index];
-  carouselImage.style.backgroundImage = `url("${slide.image}")`;
-
-  if (adBadge) adBadge.textContent = slide.badge;
-  if (adTitle) adTitle.textContent = slide.title;
-  if (adText) adText.textContent = slide.text;
-}
-
-function startCarousel() {
-  if (!carouselImage) return;
-
-  renderSlide(carouselIndex);
-
-  setInterval(() => {
-    carouselIndex = (carouselIndex + 1) % carouselSlides.length;
-    renderSlide(carouselIndex);
-  }, 4000);
-}
-
-// ── Modals & screens ──────────────────────────────────────────
 
 function showBirthdayModal(fullName, amount) {
   if (!birthdayModal || !birthdayModalText) return;
@@ -461,63 +269,227 @@ function hideSuccessModal() {
   successModal.classList.add("hidden");
 }
 
-function hideAllMainScreens() {
-  phoneScreen.style.display = "none";
-  formScreen.style.display = "none";
-  newCustomerServiceScreen.style.display = "none";
-  newCustomerReviewScreen.style.display = "none";
-  existingScreen.style.display = "none";
-  existingCustomerServiceScreen.style.display = "none";
-  existingCustomerReviewScreen.style.display = "none";
-  updateProfileScreen.style.display = "none";
-  thankYouScreen.style.display = "none";
+function showThankYouScreen(key, serviceIds) {
+  lastThankYou = { key, ids: [...serviceIds] };
+  showScreen(screens.thankYou);
+  thankYouMessage.textContent = tf(key, { services: formatServiceNamesFromIds(serviceIds) });
 }
 
-function showThankYouScreen(text) {
-  hideAllMainScreens();
-  thankYouScreen.style.display = "block";
-  thankYouMessage.textContent = text;
+function resetToMainScreen() {
+  Object.values(forms).forEach((form) => form.reset());
+
+  phoneInput.value = "";
+  if (dobInput) dobInput.value = "";
+  newPicker.search.value = "";
+  existingPicker.search.value = "";
+  newPicker.selected.length = 0;
+  existingPicker.selected.length = 0;
+
+  showScreen(screens.phone);
+  setMessage();
+
+  phoneNumber = "";
+  existingCustomer = null;
+  pendingNewCustomerPayload = null;
+  pendingExistingReferralCode = "";
+  lastThankYou = null;
 }
+
+// ── Services ──────────────────────────────────────────────────
+
+function getServiceNameById(id) {
+  return availableServices.find((s) => s.id === id)?.name ?? `Service ${id}`;
+}
+
+function formatServiceNamesFromIds(ids) {
+  if (!ids || ids.length === 0) return t("noServicesSelected");
+  return ids.map(getServiceNameById).join(", ");
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+function renderServiceList(picker) {
+  const { list, search, selected } = picker;
+  if (!list) return;
+
+  const term = (search?.value || "").trim().toLowerCase();
+  const matches = availableServices.filter((s) => s.name.toLowerCase().includes(term));
+
+  if (matches.length === 0) {
+    list.innerHTML = `<p class="queue-empty">${t("noMatchingServices")}</p>`;
+    return;
+  }
+
+  list.innerHTML = matches
+    .map((service) => {
+      const inputId = `${list.id}_service_${service.id}`;
+      const checked = selected.includes(service.id) ? "checked" : "";
+      return `
+        <label class="service-option" for="${inputId}">
+          <input type="checkbox" id="${inputId}" value="${service.id}" ${checked} />
+          <span>${escapeHtml(service.name)}</span>
+        </label>`;
+    })
+    .join("");
+}
+
+function bindServicePicker(picker) {
+  picker.search?.addEventListener("input", () => renderServiceList(picker));
+
+  picker.list?.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) || target.type !== "checkbox") return;
+
+    const serviceId = Number(target.value);
+    if (!Number.isInteger(serviceId) || serviceId <= 0) return;
+
+    const index = picker.selected.indexOf(serviceId);
+    if (index >= 0) picker.selected.splice(index, 1);
+    else picker.selected.push(serviceId);
+
+    renderServiceList(picker);
+  });
+}
+
+async function loadServices() {
+  try {
+    const data = await api("/services", { fallback: "Failed to load services." });
+    availableServices = Array.isArray(data) ? data : [];
+
+    // The catalog comes from the Owner (via the Check-In backend) and can change at any time:
+    // drop selections that are no longer offered so they are never submitted.
+    const activeIds = new Set(availableServices.map((s) => s.id));
+    [selectedNewServiceIds, selectedExistingServiceIds].forEach((selected) => {
+      for (let i = selected.length - 1; i >= 0; i--) {
+        if (!activeIds.has(selected[i])) selected.splice(i, 1);
+      }
+    });
+
+    renderServiceList(newPicker);
+    renderServiceList(existingPicker);
+  } catch (error) {
+    console.error("Failed to load services:", error);
+    const html = `<p class="queue-empty">${t("unableServices")}</p>`;
+    [newPicker, existingPicker].forEach((p) => p.list && (p.list.innerHTML = html));
+  }
+}
+
+function requireServiceSelection(picker) {
+  if (picker.selected.length > 0) return true;
+  setMessage(t("selectOneService"), "error");
+  return false;
+}
+
+// ── Carousel ──────────────────────────────────────────────────
+
+function renderSlide(index) {
+  if (!carousel.image) return;
+
+  const slide = CAROUSEL_SLIDES[index];
+  carousel.image.style.backgroundImage = `url("${slide.image}")`;
+
+  if (carousel.badge) carousel.badge.textContent = t(`${slide.key}Badge`);
+  if (carousel.title) carousel.title.textContent = t(`${slide.key}Title`);
+  if (carousel.text) carousel.text.textContent = t(`${slide.key}Text`);
+}
+
+function startCarousel() {
+  if (!carousel.image) return;
+
+  renderSlide(carouselIndex);
+  setInterval(() => {
+    carouselIndex = (carouselIndex + 1) % CAROUSEL_SLIDES.length;
+    renderSlide(carouselIndex);
+  }, CAROUSEL_INTERVAL_MS);
+}
+
+// ── Today's check-in list ─────────────────────────────────────
 
 function formatCheckInTime(dateString) {
-  const date = new Date(dateString);
-  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return new Date(dateString).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
+
+async function loadTodayCheckInOrder() {
+  try {
+    const data = await api("/queue-status", { fallback: "Failed to load today's check-in order." });
+
+    if (!data.checkins || data.checkins.length === 0) {
+      checkinOrderList.innerHTML = `<p class="queue-empty">${t("noCustomers")}</p>`;
+      return;
+    }
+
+    checkinOrderList.innerHTML = data.checkins
+      .map((item) => `
+        <div class="queue-item">
+          <div class="queue-item-left">
+            <div class="queue-position">${item.position}</div>
+            <div class="queue-name">${item.display_name || `Customer #${item.position}`}</div>
+          </div>
+          <div class="queue-time">${formatCheckInTime(item.checked_in_at)}</div>
+        </div>`)
+      .join("");
+
+    checkinOrderList
+      .querySelector(".queue-item:last-child")
+      ?.scrollIntoView({ behavior: "smooth", block: "end" });
+  } catch (error) {
+    checkinOrderList.innerHTML = `<p class="queue-empty">${t("unableQueue")}</p>`;
+  }
+}
+
+// ── Returning customer screens ────────────────────────────────
+
+const customerPhoneDisplay = (c) =>
+  safeText(c.phone_number_formatted || formatPhone(c.phone_number || ""));
 
 function renderExistingCustomerProfile(customer) {
   if (!existingCustomerProfile || !customer) return;
 
-  existingCustomerProfile.innerHTML = `
+  const row = (label, value) => `
     <div class="profile-row">
-      <span class="profile-label">Name</span>
-      <span class="profile-value">${safeText(customer.full_name)}</span>
-    </div>
-    <div class="profile-row">
-      <span class="profile-label">Phone</span>
-      <span class="profile-value">${safeText(customer.phone_number_formatted || formatPhone(customer.phone_number || ""))}</span>
-    </div>
-    <div class="profile-row">
-      <span class="profile-label">Email</span>
-      <span class="profile-value">${safeText(customer.email)}</span>
-    </div>
-    <div class="profile-row">
-      <span class="profile-label">Birthday</span>
-      <span class="profile-value">${formatDateForDisplay(customer.date_of_birth)}</span>
-    </div>
-  `;
+      <span class="profile-label">${label}</span>
+      <span class="profile-value">${value}</span>
+    </div>`;
+
+  existingCustomerProfile.innerHTML =
+    row(t("name"), safeText(customer.full_name)) +
+    row(t("phone"), customerPhoneDisplay(customer)) +
+    row(t("email"), safeText(customer.email)) +
+    row(t("birthday"), formatDateForDisplay(customer.date_of_birth));
 }
 
 function openExistingCustomerScreen() {
   if (!existingCustomer) return;
 
-  existingCustomerName.textContent = `Welcome back, ${existingCustomer.full_name}`;
+  existingCustomerName.textContent = tf("welcomeBack", { name: existingCustomer.full_name });
   renderExistingCustomerProfile(existingCustomer);
+  showScreen(screens.existing);
+  setMessage();
+}
 
-  hideAllMainScreens();
-  existingScreen.style.display = "block";
+function showExistingCustomerServiceScreen() {
+  renderServiceList(existingPicker);
+  loadServices(); // re-fetch so renamed/deactivated services show up without a page reload
+  showScreen(screens.existingServices);
+  setMessage();
+}
 
-  messageBox.textContent = "";
-  messageBox.className = "message";
+function showExistingCustomerReview() {
+  if (!existingCustomer) return;
+
+  const r = review.existing;
+  r.name.textContent = safeText(existingCustomer.full_name);
+  r.phone.textContent = customerPhoneDisplay(existingCustomer);
+  r.email.textContent = safeText(existingCustomer.email);
+  r.referral.textContent = safeText(pendingExistingReferralCode);
+  r.services.textContent = formatServiceNamesFromIds(existingPicker.selected);
+
+  showScreen(screens.existingReview);
+  setMessage();
 }
 
 function populateUpdateProfileForm(customer) {
@@ -527,191 +499,10 @@ function populateUpdateProfileForm(customer) {
   updateEmailInput.value = customer.email || "";
 }
 
-// ── Today's check-in list ─────────────────────────────────────
-
-async function loadTodayCheckInOrder() {
-  try {
-    const response = await fetch(`${API_BASE}/today-checkins`);
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(getErrorMessage(data, "Failed to load today's check-in order."));
-    }
-
-    if (!data.checkins || data.checkins.length === 0) {
-      checkinOrderList.innerHTML = `<p class="queue-empty">No customers checked in yet.</p>`;
-      return;
-    }
-
-    checkinOrderList.innerHTML = data.checkins
-      .map(item => `
-        <div class="queue-item">
-          <div class="queue-item-left">
-            <div class="queue-position">${item.position}</div>
-            <div class="queue-name">${item.full_name}</div>
-          </div>
-          <div class="queue-time">${formatCheckInTime(item.checked_in_at)}</div>
-        </div>
-      `)
-      .join("");
-
-    checkinOrderList.querySelector(".queue-item:last-child")?.scrollIntoView({
-      behavior: "smooth",
-      block: "end"
-    });
-  } catch (error) {
-    checkinOrderList.innerHTML = `<p class="queue-empty">Unable to load check-in order.</p>`;
-  }
-}
-
-// ── Reset ─────────────────────────────────────────────────────
-
-function resetToMainScreen() {
-  customerForm.reset();
-  existingCustomerForm.reset();
-  phoneForm.reset();
-  updateProfileForm.reset();
-
-  if (phoneInput) phoneInput.value = "";
-  if (dobInput) dobInput.value = "";
-  if (newServiceSearchInput) newServiceSearchInput.value = "";
-  if (existingServiceSearchInput) existingServiceSearchInput.value = "";
-
-  selectedNewServiceIds.length = 0;
-  selectedExistingServiceIds.length = 0;
-  pendingExistingReferralCode = "";
-
-  hideAllMainScreens();
-  phoneScreen.style.display = "block";
-
-  messageBox.textContent = "";
-  messageBox.className = "message";
-
-  phoneNumber = "";
-  existingCustomer = null;
-  pendingNewCustomerPayload = null;
-}
-
-if (closeBirthdayModalBtn) {
-  closeBirthdayModalBtn.addEventListener("click", hideBirthdayModal);
-}
-
-if (backHomeBtn) {
-  backHomeBtn.addEventListener("click", resetToMainScreen);
-}
-
-if (closeSuccessModalBtn) {
-  closeSuccessModalBtn.addEventListener("click", hideSuccessModal);
-}
-
-// ── Phone input formatting ────────────────────────────────────
-
-if (phoneInput) {
-  phoneInput.addEventListener("input", (e) => {
-    e.target.value = formatPhone(e.target.value);
-  });
-}
-
-if (updatePhoneInput) {
-  updatePhoneInput.addEventListener("input", () => {
-    updatePhoneInput.value = formatPhone(updatePhoneInput.value);
-  });
-}
-
-// ── DOB input rules ───────────────────────────────────────────
-
-setDOBLimits();
-
-if (dobInput) {
-  dobInput.addEventListener("input", validateDOBInput);
-  dobInput.addEventListener("change", validateDOBInput);
-}
-
-// ── Service search + checkbox binding ────────────────────────
-
-if (newServiceSearchInput) {
-  newServiceSearchInput.addEventListener("input", () => {
-    renderServiceList(newServiceList, selectedNewServiceIds, newServiceSearchInput.value);
-  });
-}
-
-if (existingServiceSearchInput) {
-  existingServiceSearchInput.addEventListener("input", () => {
-    renderServiceList(existingServiceList, selectedExistingServiceIds, existingServiceSearchInput.value);
-  });
-}
-
-bindServiceListSelection(newServiceList, () => selectedNewServiceIds, newServiceSearchInput);
-bindServiceListSelection(existingServiceList, () => selectedExistingServiceIds, existingServiceSearchInput);
-
-// ── Phone form ────────────────────────────────────────────────
-
-phoneForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-
-  phoneNumber = rawDigits(phoneInput.value);
-
-  if (phoneNumber.length !== 10) {
-    messageBox.textContent = "Please enter a valid 10-digit phone number.";
-    messageBox.className = "message error";
-    return;
-  }
-
-  messageBox.textContent = "Checking phone number...";
-  messageBox.className = "message";
-
-  try {
-    const response = await fetch(
-      `${API_BASE}/customers/by-phone/${encodeURIComponent(phoneNumber)}`
-    );
-
-    if (response.ok) {
-      existingCustomer = await response.json();
-
-      const statusResponse = await fetch(
-        `${API_BASE}/customers/check-in-status/${encodeURIComponent(phoneNumber)}`
-      );
-      const statusData = await statusResponse.json();
-
-      if (!statusResponse.ok) {
-        throw new Error(getErrorMessage(statusData, "Failed to check today's status."));
-      }
-
-      if (statusData.already_checked_in_today) {
-        messageBox.textContent = `${statusData.full_name} has already checked in today.`;
-        messageBox.className = "message error";
-        hideAllMainScreens();
-        phoneScreen.style.display = "block";
-        return;
-      }
-
-      openExistingCustomerScreen();
-      return;
-    }
-
-    if (response.status === 404) {
-      existingCustomer = null;
-      pendingNewCustomerPayload = null;
-      selectedNewServiceIds.length = 0;
-      if (newServiceSearchInput) newServiceSearchInput.value = "";
-      messageBox.textContent = "";
-      hideAllMainScreens();
-      formScreen.style.display = "block";
-      return;
-    }
-
-    const data = await response.json();
-    throw new Error(getErrorMessage(data, "Something went wrong while checking phone number."));
-  } catch (error) {
-    messageBox.textContent = error.message || "Failed to check phone number.";
-    messageBox.className = "message error";
-  }
-});
-
-// ── New customer flow ─────────────────────────────────────────
+// ── New customer screens ──────────────────────────────────────
 
 function buildNewCustomerPayload() {
-  const formData = new FormData(customerForm);
+  const formData = new FormData(forms.newCustomer);
   const referralCode = formData.get("referral_code")?.trim().toUpperCase() || "";
 
   return {
@@ -723,15 +514,123 @@ function buildNewCustomerPayload() {
   };
 }
 
-customerForm.addEventListener("submit", async (event) => {
+function showNewCustomerServiceScreen() {
+  renderServiceList(newPicker);
+  loadServices(); // re-fetch so renamed/deactivated services show up without a page reload
+  showScreen(screens.newServices);
+  setMessage();
+}
+
+function showNewCustomerReview(payload) {
+  pendingNewCustomerPayload = payload;
+
+  const r = review.newCustomer;
+  r.name.textContent = safeText(payload.full_name);
+  r.dob.textContent = formatDateForDisplay(payload.date_of_birth);
+  r.email.textContent = safeText(payload.email);
+  r.referral.textContent = safeText(payload.referral_code);
+  r.services.textContent = formatServiceNamesFromIds(newPicker.selected);
+
+  showScreen(screens.newReview);
+  setMessage();
+}
+
+// ── Event wiring ──────────────────────────────────────────────
+
+const confirmNewCustomerBtn = $("confirm-new-customer-btn");
+const confirmExistingCustomerBtn = $("confirm-existing-customer-btn");
+
+function on(id, handler) {
+  $(id)?.addEventListener("click", handler);
+}
+
+// Modals & home
+if ($("close-birthday-modal")) {
+  $("close-birthday-modal").addEventListener("click", hideBirthdayModal);
+}
+
+if ($("close-success-modal")) {
+  $("close-success-modal").addEventListener("click", hideSuccessModal);
+}
+
+on("back-home-btn", resetToMainScreen);
+
+// Input formatting
+phoneInput.addEventListener("input", (e) => (e.target.value = formatPhone(e.target.value)));
+updatePhoneInput.addEventListener("input", () => (updatePhoneInput.value = formatPhone(updatePhoneInput.value)));
+
+if (dobInput) {
+  dobInput.max = getTodayISODate();
+  dobInput.min = "1900-01-01";
+  dobInput.setAttribute("maxlength", "10");
+  dobInput.setAttribute("inputmode", "numeric");
+  dobInput.addEventListener("input", validateDOBInput);
+  dobInput.addEventListener("change", validateDOBInput);
+}
+
+bindServicePicker(newPicker);
+bindServicePicker(existingPicker);
+
+// Phone lookup
+forms.phone.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  phoneNumber = rawDigits(phoneInput.value);
+
+  if (phoneNumber.length !== 10) {
+    setMessage(t("invalidPhone"), "error");
+    return;
+  }
+
+  setMessage(t("checkingPhone"));
+
+  try {
+    const response = await fetch(`${API_BASE}/customers/by-phone/${encodeURIComponent(phoneNumber)}`);
+
+    if (response.ok) {
+      existingCustomer = await response.json();
+
+      const status = await api(
+        `/customers/check-in-status/${encodeURIComponent(phoneNumber)}`,
+        { fallback: "Failed to check today's status." }
+      );
+
+      if (status.already_checked_in_today) {
+        setMessage(tf("alreadyCheckedIn", { name: status.full_name }), "error");
+        showScreen(screens.phone);
+        return;
+      }
+
+      openExistingCustomerScreen();
+      return;
+    }
+
+    if (response.status === 404) {
+      existingCustomer = null;
+      pendingNewCustomerPayload = null;
+      newPicker.selected.length = 0;
+      newPicker.search.value = "";
+      setMessage();
+      showScreen(screens.newForm);
+      return;
+    }
+
+    const data = await response.json();
+    throw new Error(getErrorMessage(data, "Something went wrong while checking phone number."));
+  } catch (error) {
+    setMessage(error.message || "Failed to check phone number.", "error");
+  }
+});
+
+// New customer flow
+forms.newCustomer.addEventListener("submit", (event) => {
   event.preventDefault();
 
   const payload = buildNewCustomerPayload();
 
   if (!validateDOBInput() || !isValidDOB(payload.date_of_birth)) {
-    messageBox.textContent = "Please enter a valid date of birth with a 4-digit year.";
-    messageBox.className = "message error";
-    if (dobInput) dobInput.reportValidity();
+    setMessage(t("dobInvalid"), "error");
+    dobInput?.reportValidity();
     return;
   }
 
@@ -739,36 +638,18 @@ customerForm.addEventListener("submit", async (event) => {
   showNewCustomerServiceScreen();
 });
 
-if (backToNewCustomerFormBtn) {
-  backToNewCustomerFormBtn.addEventListener("click", () => {
-    hideAllMainScreens();
-    formScreen.style.display = "block";
-    messageBox.textContent = "";
-    messageBox.className = "message";
-  });
-}
+on("back-to-new-customer-form-btn", () => {
+  showScreen(screens.newForm);
+  setMessage();
+});
 
-if (continueToNewReviewBtn) {
-  continueToNewReviewBtn.addEventListener("click", () => {
-    if (!pendingNewCustomerPayload) {
-      pendingNewCustomerPayload = buildNewCustomerPayload();
-    }
+on("continue-to-new-review-btn", () => {
+  if (!pendingNewCustomerPayload) pendingNewCustomerPayload = buildNewCustomerPayload();
+  if (!requireServiceSelection(newPicker)) return;
+  showNewCustomerReview(pendingNewCustomerPayload);
+});
 
-    if (selectedNewServiceIds.length === 0) {
-      messageBox.textContent = "Please select at least one service.";
-      messageBox.className = "message error";
-      return;
-    }
-
-    showNewCustomerReview(pendingNewCustomerPayload);
-  });
-}
-
-if (editNewCustomerBtn) {
-  editNewCustomerBtn.addEventListener("click", () => {
-    showNewCustomerServiceScreen();
-  });
-}
+on("edit-new-customer-btn", showNewCustomerServiceScreen);
 
 if (confirmNewCustomerBtn) {
   confirmNewCustomerBtn.addEventListener("click", async (event) => {
@@ -778,13 +659,13 @@ if (confirmNewCustomerBtn) {
     if (!pendingNewCustomerPayload) return;
 
     if (selectedNewServiceIds.length === 0) {
-      messageBox.textContent = "Please select at least one service.";
+      messageBox.textContent = t("selectOneService");
       messageBox.className = "message error";
       return;
     }
 
     confirmNewCustomerBtn.disabled = true;
-    messageBox.textContent = "Saving customer...";
+    messageBox.textContent = t("savingCustomer");
     messageBox.className = "message";
 
     try {
@@ -836,7 +717,10 @@ if (confirmNewCustomerBtn) {
           throw new Error(getErrorMessage(applyData, "Referral code not found or invalid."));
         }
 
-        referralAppliedMessage = `You’ve received ${applyData.discount_percent}% off today as a referral reward from ${applyData.referral_from_customer_name}.`;
+        referralAppliedMessage = tf("referralApplied", {
+          percent: applyData.discount_percent,
+          from: applyData.referral_from_customer_name
+        });
       }
 
       const checkInResponse = await fetch(
@@ -862,21 +746,25 @@ if (confirmNewCustomerBtn) {
       let successText = "";
 
       if (birthdayDiscount) {
-        successText = `Happy Birthday, ${checkInData.full_name}! ✨
-Enjoy a complimentary $${birthdayDiscount.amount} birthday reward today.
-Sit back, relax, and let us take care of you.`;
+        successText = tf("successBirthday", {
+          name: checkInData.full_name,
+          amount: birthdayDiscount.amount
+        });
       } else if (referralAppliedMessage) {
-        successText = `Welcome, ${checkInData.full_name}! ✨
-${referralAppliedMessage}
-Enjoy your visit with us.`;
+        successText = tf("successWelcomeReferral", {
+          name: checkInData.full_name,
+          referral: referralAppliedMessage
+        });
       } else if (referralRewardDiscount) {
-        successText = `Congratulations, ${checkInData.full_name}! ✨
-Your ${referralRewardDiscount.percent}% referral reward has been unlocked and applied today.
-Thank you for sharing the love with others.`;
+        successText = tf("successRewardUnlocked", {
+          name: checkInData.full_name,
+          percent: referralRewardDiscount.percent
+        });
       } else if (earnedReferralCode) {
-        successText = `You’ve unlocked a special reward, ${checkInData.full_name}! ✨
-Your personal referral code is ${checkInData.referral_code}.
-Share it with friends and give them 10% off their visit.`;
+        successText = tf("successCode", {
+          name: checkInData.full_name,
+          code: checkInData.referral_code
+        });
       }
 
       messageBox.textContent = "";
@@ -888,16 +776,15 @@ Share it with friends and give them 10% off their visit.`;
         showSuccessModal(successText);
       }
 
-      const selectedServicesText = formatServiceNamesFromIds(selectedNewServiceIds);
+      const servicesForThanks = [...selectedNewServiceIds];
 
       pendingNewCustomerPayload = null;
       selectedNewServiceIds.length = 0;
 
-      showThankYouScreen(
-        `You are checked in for: ${selectedServicesText}. Please take a seat and relax. A technician will be with you shortly.`
-      );
+      showThankYouScreen("thankYouNew", servicesForThanks);
     } catch (error) {
       console.error("New customer confirm error:", error);
+      loadServices(); // the chosen service may have been removed by the Owner; refresh the list
       messageBox.textContent = error.message || "Failed to save customer.";
       messageBox.className = "message error";
       messageBox.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -907,9 +794,8 @@ Share it with friends and give them 10% off their visit.`;
   });
 }
 
-// ── Returning customer flow ───────────────────────────────────
-
-existingCustomerForm.addEventListener("submit", async (event) => {
+// Returning customer flow
+forms.existingCustomer.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   const referralCodeInput = document.getElementById("existing_referral_code");
@@ -918,29 +804,14 @@ existingCustomerForm.addEventListener("submit", async (event) => {
   showExistingCustomerServiceScreen();
 });
 
-if (backToExistingCustomerBtn) {
-  backToExistingCustomerBtn.addEventListener("click", () => {
-    openExistingCustomerScreen();
-  });
-}
+on("back-to-existing-customer-btn", openExistingCustomerScreen);
 
-if (continueToExistingReviewBtn) {
-  continueToExistingReviewBtn.addEventListener("click", () => {
-    if (selectedExistingServiceIds.length === 0) {
-      messageBox.textContent = "Please select at least one service.";
-      messageBox.className = "message error";
-      return;
-    }
+on("continue-to-existing-review-btn", () => {
+  if (!requireServiceSelection(existingPicker)) return;
+  showExistingCustomerReview();
+});
 
-    showExistingCustomerReview();
-  });
-}
-
-if (editExistingCustomerBtn) {
-  editExistingCustomerBtn.addEventListener("click", () => {
-    showExistingCustomerServiceScreen();
-  });
-}
+on("edit-existing-customer-btn", showExistingCustomerServiceScreen);
 
 if (confirmExistingCustomerBtn) {
   confirmExistingCustomerBtn.addEventListener("click", async (event) => {
@@ -948,13 +819,13 @@ if (confirmExistingCustomerBtn) {
     event.stopPropagation();
 
     if (selectedExistingServiceIds.length === 0) {
-      messageBox.textContent = "Please select at least one service.";
+      messageBox.textContent = t("selectOneService");
       messageBox.className = "message error";
       return;
     }
 
     confirmExistingCustomerBtn.disabled = true;
-    messageBox.textContent = "Processing check-in...";
+    messageBox.textContent = t("processingCheckIn");
     messageBox.className = "message";
 
     try {
@@ -975,7 +846,10 @@ if (confirmExistingCustomerBtn) {
           throw new Error(getErrorMessage(applyData, "Failed to apply referral code."));
         }
 
-        referralAppliedMessage = `You’ve received ${applyData.discount_percent}% off today as a referral reward from ${applyData.referral_from_customer_name}.`;
+        referralAppliedMessage = tf("referralApplied", {
+          percent: applyData.discount_percent,
+          from: applyData.referral_from_customer_name
+        });
       }
 
       const checkInResponse = await fetch(
@@ -1001,21 +875,25 @@ if (confirmExistingCustomerBtn) {
       let successText = "";
 
       if (birthdayDiscount) {
-        successText = `Happy Birthday, ${checkInData.full_name}! ✨
-Enjoy a complimentary $${birthdayDiscount.amount} birthday reward today.
-Sit back, relax, and let us take care of you.`;
+        successText = tf("successBirthday", {
+          name: checkInData.full_name,
+          amount: birthdayDiscount.amount
+        });
       } else if (referralAppliedMessage) {
-        successText = `Welcome back, ${checkInData.full_name}! ✨
-${referralAppliedMessage}
-Enjoy your salon experience.`;
+        successText = tf("successWelcomeBackReferral", {
+          name: checkInData.full_name,
+          referral: referralAppliedMessage
+        });
       } else if (referralRewardDiscount) {
-        successText = `Congratulations, ${checkInData.full_name}! ✨
-Your ${referralRewardDiscount.percent}% referral reward has been unlocked and applied today.
-Thank you for sharing the love with others.`;
+        successText = tf("successRewardUnlocked", {
+          name: checkInData.full_name,
+          percent: referralRewardDiscount.percent
+        });
       } else if (earnedReferralCode) {
-        successText = `You’ve unlocked a special reward, ${checkInData.full_name}! ✨
-Your personal referral code is ${checkInData.referral_code}.
-Share it with friends and give them 10% off their visit.`;
+        successText = tf("successCode", {
+          name: checkInData.full_name,
+          code: checkInData.referral_code
+        });
       }
 
       messageBox.textContent = "";
@@ -1027,16 +905,15 @@ Share it with friends and give them 10% off their visit.`;
         showSuccessModal(successText);
       }
 
-      const selectedServicesText = formatServiceNamesFromIds(selectedExistingServiceIds);
+      const servicesForThanks = [...selectedExistingServiceIds];
 
       selectedExistingServiceIds.length = 0;
       pendingExistingReferralCode = "";
 
-      showThankYouScreen(
-        `Thank you for checking in for: ${selectedServicesText}. Please take a seat and enjoy your salon experience.`
-      );
+      showThankYouScreen("thankYouExisting", servicesForThanks);
     } catch (error) {
       console.error("Returning customer confirm error:", error);
+      loadServices(); // the chosen service may have been removed by the Owner; refresh the list
       messageBox.textContent = error.message || "Failed to process returning customer.";
       messageBox.className = "message error";
       messageBox.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1046,90 +923,207 @@ Share it with friends and give them 10% off their visit.`;
   });
 }
 
-// ── Update profile ────────────────────────────────────────────
+// Update profile
+on("update-profile-btn", () => {
+  populateUpdateProfileForm(existingCustomer);
+  showScreen(screens.updateProfile);
+  setMessage();
+});
 
-if (updateProfileBtn) {
-  updateProfileBtn.addEventListener("click", () => {
-    populateUpdateProfileForm(existingCustomer);
-    hideAllMainScreens();
-    updateProfileScreen.style.display = "block";
-    messageBox.textContent = "";
-    messageBox.className = "message";
-  });
-}
+on("cancel-update-profile-btn", () => {
+  forms.updateProfile.reset();
+  openExistingCustomerScreen();
+});
 
-if (cancelUpdateProfileBtn) {
-  cancelUpdateProfileBtn.addEventListener("click", () => {
-    updateProfileForm.reset();
+forms.updateProfile.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const full_name = updateFullNameInput.value.trim();
+  const phone_number = rawDigits(updatePhoneInput.value);
+  const email = updateEmailInput.value.trim();
+
+  if (!full_name) return setMessage(t("nameRequired"), "error");
+  if (phone_number.length !== 10) return setMessage(t("phoneTenDigits"), "error");
+
+  setMessage(t("updatingProfile"));
+
+  try {
+    const data = await api(`/customers/${encodeURIComponent(phoneNumber)}/profile`, {
+      method: "PATCH",
+      body: { full_name, phone_number, email: email || null },
+      fallback: "Failed to update profile."
+    });
+
+    existingCustomer = data;
+    phoneNumber = data.phone_number;
+
+    setMessage();
+    showSuccessModal(tf("profileUpdated", { name: data.full_name }));
+
+    forms.updateProfile.reset();
     openExistingCustomerScreen();
+  } catch (error) {
+    setMessage(error.message || "Failed to update profile.", "error");
+  }
+});
+
+// ── Language ──────────────────────────────────────────────────
+
+const TEXT_BINDINGS = [
+  [".brand", "salon"],
+  [".hero h1", "welcome"],
+  [".hero-subtitle", "heroSubtitle"],
+  [".promo-disclaimer", "promoDisclaimer"],
+
+  [".queue-card h2", "todayOrder"],
+  [".queue-card .subtitle", "todayOrderSubtitle"],
+
+  ["#phone-screen h2", "checkIn"],
+  ["#phone-screen .subtitle", "enterPhone"],
+  ['#phone-form button[type="submit"]', "continue"],
+
+  ["#form-screen h2", "newCustomer"],
+  ["#form-screen .subtitle", "completeInfo"],
+  ['#new-customer-form button[type="submit"]', "continue"],
+
+  ["#new-customer-service-screen h2", "selectServices"],
+  ["#new-customer-service-screen .subtitle", "chooseServices"],
+  ["#existing-customer-service-screen h2", "selectServices"],
+  ["#existing-customer-service-screen .subtitle", "chooseServices"],
+  ["#back-to-new-customer-form-btn", "back"],
+  ["#continue-to-new-review-btn", "reviewInformation"],
+  ["#back-to-existing-customer-btn", "back"],
+  ["#continue-to-existing-review-btn", "reviewInformation"],
+
+  ["#new-customer-review-screen h2", "reviewTitle"],
+  ["#new-customer-review-screen .subtitle", "checkInformation"],
+  ["#new-customer-review-screen .reminder-box", "checkInformation"],
+  ["#existing-customer-review-screen h2", "reviewTitle"],
+  ["#existing-customer-review-screen .subtitle", "checkInformation"],
+  ["#existing-customer-review-screen .reminder-box", "checkInformation"],
+  ["#edit-new-customer-btn", "edit"],
+  ["#confirm-new-customer-btn", "continue"],
+  ["#edit-existing-customer-btn", "edit"],
+  ["#confirm-existing-customer-btn", "checkIn"],
+
+  ["#existing-screen h2", "returningCustomer"],
+  ['#existing-customer-form button[type="submit"]', "continue"],
+  ["#update-profile-btn", "updateProfile"],
+
+  ["#update-profile-screen h2", "updateProfile"],
+  ["#update-profile-screen .subtitle", "editInformation"],
+  ['#update-profile-form button[type="submit"]', "save"],
+  ["#cancel-update-profile-btn", "cancel"],
+
+  ["#thank-you-screen h2", "thankYou"],
+  ["#back-home-btn", "backHome"],
+  ["#birthday-modal h2", "happyBirthday"],
+  ["#close-birthday-modal", "awesome"],
+  ["#success-modal h2", "checkedIn"],
+  ["#close-success-modal", "lovely"]
+];
+
+const PLACEHOLDER_BINDINGS = [
+  ['#new-customer-form input[name="full_name"]', "fullName"],
+  ['#new-customer-form input[name="email"]', "emailOptional"],
+  ['#new-customer-form input[name="referral_code"]', "referralOptional"],
+  ["#new-service-search", "searchServices"],
+  ["#existing-service-search", "searchServices"],
+  ["#existing_referral_code", "existingReferralOptional"],
+  ["#update_full_name", "fullName"],
+  ["#update_phone", "phoneNumber"],
+  ["#update_email", "emailOptional"]
+];
+
+function applyBindings(bindings, property) {
+  bindings.forEach(([selector, key]) => {
+    const element = document.querySelector(selector);
+    if (element) element[property] = t(key);
   });
 }
 
-if (updateProfileForm) {
-  updateProfileForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
+function setLabels(screen, keys) {
+  const labels = screen?.querySelectorAll(".profile-label");
+  if (labels?.length >= keys.length) {
+    keys.forEach((key, i) => (labels[i].textContent = t(key)));
+  }
+}
 
-    const updatedFullName = updateFullNameInput.value.trim();
-    const updatedPhone = rawDigits(updatePhoneInput.value);
-    const updatedEmail = updateEmailInput.value.trim();
+// Re-translates whatever dynamic content is currently on screen
+function refreshDynamicScreens() {
+  if (existingCustomer) {
+    existingCustomerName.textContent = tf("welcomeBack", { name: existingCustomer.full_name });
+    renderExistingCustomerProfile(existingCustomer);
+  }
 
-    if (!updatedFullName) {
-      messageBox.textContent = "Name is required.";
-      messageBox.className = "message error";
-      return;
-    }
+  if (screens.newReview.style.display === "block" && pendingNewCustomerPayload) {
+    showNewCustomerReview(pendingNewCustomerPayload);
+  }
 
-    if (updatedPhone.length !== 10) {
-      messageBox.textContent = "Phone number must be exactly 10 digits.";
-      messageBox.className = "message error";
-      return;
-    }
+  if (screens.existingReview.style.display === "block") {
+    showExistingCustomerReview();
+  }
 
-    messageBox.textContent = "Updating profile...";
-    messageBox.className = "message";
+  if (screens.thankYou.style.display === "block" && lastThankYou) {
+    thankYouMessage.textContent = tf(lastThankYou.key, {
+      services: formatServiceNamesFromIds(lastThankYou.ids)
+    });
+  }
+}
 
-    try {
-      const response = await fetch(
-        `${API_BASE}/customers/${encodeURIComponent(phoneNumber)}/profile`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            full_name: updatedFullName,
-            phone_number: updatedPhone,
-            email: updatedEmail || null
-          })
-        }
-      );
+function applyLanguage(lang) {
+  if (!translations[lang]) lang = "en";
 
-      const data = await response.json();
+  currentLanguage = lang;
+  localStorage.setItem("nailSalonLanguage", lang);
+  document.documentElement.lang = lang;
 
-      if (!response.ok) {
-        throw new Error(getErrorMessage(data, "Failed to update profile."));
-      }
+  applyBindings(TEXT_BINDINGS, "textContent");
+  applyBindings(PLACEHOLDER_BINDINGS, "placeholder");
 
-      existingCustomer = data;
-      phoneNumber = data.phone_number;
+  setLabels(screens.newReview, ["name", "birthday", "email", "referral", "services"]);
+  setLabels(screens.existingReview, ["name", "phone", "email", "referral", "services"]);
 
-      messageBox.textContent = "";
-      messageBox.className = "message";
+  renderServiceList(newPicker);
+  renderServiceList(existingPicker);
+  renderSlide(carouselIndex);
+  refreshDynamicScreens();
+  loadTodayCheckInOrder();
+}
 
-      showSuccessModal(
-        `Profile updated successfully, ${data.full_name}. Your rewards, referral code, birthday benefits, and visit history all stay on the same account.`
-      );
+const languageToggle = $("language-toggle");
+const languageDropdown = $("language-dropdown");
 
-      updateProfileForm.reset();
-      openExistingCustomerScreen();
-    } catch (error) {
-      messageBox.textContent = error.message || "Failed to update profile.";
-      messageBox.className = "message error";
+if (languageToggle && languageDropdown) {
+  languageToggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    languageDropdown.classList.toggle("hidden");
+  });
+
+  document.querySelectorAll(".language-option").forEach((button) => {
+    button.addEventListener("click", () => {
+      const lang = button.dataset.lang;
+      applyLanguage(lang);
+      languageToggle.textContent = LANGUAGE_LABELS[lang];
+      languageDropdown.classList.add("hidden");
+    });
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".language-menu")) {
+      languageDropdown.classList.add("hidden");
     }
   });
+}
+
+if (languageToggle) {
+  languageToggle.textContent = LANGUAGE_LABELS[currentLanguage] || "🌐 EN";
 }
 
 // ── Init ──────────────────────────────────────────────────────
 
+applyLanguage(currentLanguage);
 startCarousel();
 loadTodayCheckInOrder();
 loadServices();
-setInterval(loadTodayCheckInOrder, 10000);
+setInterval(loadTodayCheckInOrder, QUEUE_REFRESH_MS);
