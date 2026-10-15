@@ -35,6 +35,8 @@ KIOSK_ALLOWLIST = {
     ("GET", "/customers/check-in-status/{phone}"),
     ("POST", "/customers/new"),
     ("POST", "/customers/check-in/{phone}"),
+    ("POST", "/appointments/lookup"),
+    ("POST", "/appointments/check-in"),
     ("POST", "/referrals/validate"),
     ("POST", "/referrals/apply"),
     ("PATCH", "/customers/{phone}/profile"),

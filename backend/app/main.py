@@ -20,6 +20,8 @@ from .scheduler import scheduler
 from .timeutils import SALON_TZ, now_local, today_local
 from .phone_normalization import normalize_us_phone
 from .owner_catalog import CatalogService, CatalogUnavailable, catalog
+from .owner_appointments import AppointmentLookupUnavailable, appointments_client
+from . import schema_upgrade
 from .security import require_internal_service
 from . import kiosk_security
 from .kiosk import router as kiosk_router
@@ -54,6 +56,7 @@ NEW_COLUMNS = {
         "discount_type": "VARCHAR",
         "discount_value": "FLOAT DEFAULT 0",
         "discount_label": "VARCHAR",
+        "appointment_code": "VARCHAR",
     },
     "customers": {
         "referred_discount_pending": "BOOLEAN NOT NULL DEFAULT 0",
@@ -92,6 +95,7 @@ def ensure_unique_indexes() -> None:
 
 
 ensure_columns()
+schema_upgrade.make_birth_date_optional(engine)
 ensure_unique_indexes()
 
 
@@ -216,7 +220,10 @@ def _birthday_in_year(dob: date, year: int) -> date:
         return date(year, 2, 28)
 
 
-def days_until_next_birthday(dob: date) -> int:
+def days_until_next_birthday(dob: date | None) -> int:
+    """Days to the next birthday; -1 when no birth date is on file (so it is never inside a reminder window)."""
+    if dob is None:
+        return -1
     today = today_local()
     next_birthday = _birthday_in_year(dob, today.year)
     if next_birthday < today:
@@ -224,7 +231,9 @@ def days_until_next_birthday(dob: date) -> int:
     return (next_birthday - today).days
 
 
-def is_exact_birthday(dob: date) -> bool:
+def is_exact_birthday(dob: date | None) -> bool:
+    if dob is None:
+        return False
     today = today_local()
     return _birthday_in_year(dob, today.year) == today
 
@@ -399,7 +408,7 @@ async def lifespan(app: FastAPI):
         logger.info("Birthday reminder scheduler stopped.")
 
 
-app = FastAPI(title="Nail System API", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="Nail System API", version="0.3.1", lifespan=lifespan)
 
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://127.0.0.1:5500,http://localhost:5500").split(",") if o.strip()]
 
@@ -579,6 +588,8 @@ def open_profile_for_editing(
     customer_key = str(customer.id)
     kiosk_security.ensure_not_blocked("profile_fail_customer", customer_key)
 
+    if customer.date_of_birth is None:  # first recorded from an appointment: there is no birth date to confirm, so a tablet cannot open this profile
+        raise HTTPException(status_code=403, detail="Please ask a staff member to update this profile.")
     if not hmac.compare_digest(payload.date_of_birth.isoformat(), customer.date_of_birth.isoformat()):
         kiosk_security.record_failure("profile_fail_customer", customer_key)
         kiosk_security.record_failure("profile_fail_device", device_key)
@@ -696,6 +707,7 @@ def get_today_checkins(db: Session = Depends(get_db), _=Depends(require_internal
             "phone_number": visit.customer.phone_number,
             "phone_e164": normalize_us_phone(visit.customer.phone_number).e164,
             "checked_in_at": visit.checked_in_at,
+            "appointment_code": visit.appointment_code,
             "services": _visit_services(visit)[0],
             "service_ids": _visit_services(visit)[1],
             **_today_queue_discount(visit, visit.customer),
@@ -739,11 +751,16 @@ def check_in_customer(
         raise _already_checked_in_error()
 
     selected_services = _get_selected_services_or_404(payload.selected_service_ids)
+    return _perform_check_in(db, customer, selected_services)
 
+
+def _perform_check_in(db: Session, customer: models.Customer, selected_services: list[CatalogService], appointment_code: str | None = None) -> dict:
+    """Creates today's visit with its services and applies/earns the rewards. Shared by the normal check-in and the appointment check-in."""
     new_visit = models.Visit(
         customer_id=customer.id,
         visit_date=today_local(),
         checked_in_at=now_local(),
+        appointment_code=appointment_code,
     )
     db.add(new_visit)
     try:
@@ -839,6 +856,114 @@ def check_in_customer(
         "selected_services": [service.name for service in selected_services],
         "selected_service_ids": [service.id for service in selected_services],
     }
+
+
+# ----------------------------
+# Check-in for an appointment
+# ----------------------------
+def _appointment_lookup_or_503(phone_digits: str):
+    """Asks the Owner (server to server). A failure is never reported as "no appointment": the customer is sent to the front desk."""
+    try:
+        return appointments_client.lookup(normalize_us_phone(phone_digits).e164)
+    except AppointmentLookupUnavailable:
+        raise HTTPException(status_code=503, detail="We couldn't check your appointment right now. Please ask a staff member for help.")
+
+
+@app.post("/appointments/lookup", response_model=schemas.KioskAppointmentLookup)
+def lookup_todays_appointment(
+    payload: schemas.AppointmentLookupRequest, db: Session = Depends(get_db), device=Depends(require_kiosk_device)
+):
+    """Phone first: is there exactly one appointment today for this phone number? The tablet is told only what it needs to show
+    ("Welcome back, Ana: 2:00 PM, Gel Manicure, Amy"). Several appointments are never guessed between; an appointment the kiosk cannot
+    carry the services of (an old record) is sent to staff."""
+    kiosk_security.throttle("appointment_lookup", str(device.id))
+    found = _appointment_lookup_or_503(payload.phone_number)
+    if found.outcome == "none":
+        return {"outcome": "none"}
+    if found.outcome == "multiple":
+        return {"outcome": "multiple"}
+    if found.outcome != "one":
+        return {"outcome": "staff"}
+    appointment = found.appointment
+    customer = db.query(models.Customer).filter(models.Customer.phone_number == payload.phone_number).first()
+    return {
+        "outcome": "one",
+        "already_checked_in": bool(customer and _get_visit_today(db, customer.id)),
+        "appointment": {
+            "code": appointment.code,
+            "time": appointment.appointment_time,
+            "first_name": first_name_of(appointment.customer_name),
+            "services": [service.name for service in appointment.services],
+            "technician_name": appointment.technician_name,
+        },
+    }
+
+
+def _clean_customer_name(raw: str) -> str:
+    try:
+        return schemas._clean_name(" ".join((raw or "").split()))
+    except ValueError:
+        return "Customer"
+
+
+def _customer_from_appointment(db: Session, phone_digits: str, appointment_name: str) -> models.Customer:
+    """A customer first known from an appointment (booked by phone or by staff): the minimum record, with no birth date.
+    Their profile is only ever completed or changed by staff."""
+    customer = models.Customer(
+        full_name=_clean_customer_name(appointment_name), phone_number=phone_digits, email=None, date_of_birth=None,
+        referral_code=None, referral_count=0, referral_discount_percent=10, referral_discount_pending=False, referred_discount_pending=False,
+        birthday_discount_amount=10, birthday_discount_used_month=None, visit_count_cycle=0, visit_discount_pending=False,
+        used_referral_code=None, used_referral_from_customer_id=None,
+    )
+    db.add(customer)
+    try:
+        db.commit()
+    except IntegrityError:  # two taps at once: the other one created them
+        db.rollback()
+        return db.query(models.Customer).filter(models.Customer.phone_number == phone_digits).one()
+    db.refresh(customer)
+    return customer
+
+
+def _response_for_existing_visit(db: Session, customer: models.Customer, visit: models.Visit) -> dict:
+    names, ids = _visit_services(visit)
+    return {
+        "message": "Customer is already checked in.",
+        "phone_number": customer.phone_number,
+        "full_name": first_name_of(customer.full_name),
+        "visit_count": db.query(models.Visit).filter(models.Visit.customer_id == customer.id).count(),
+        "visit_count_cycle": customer.visit_count_cycle,
+        "referral_code": customer.referral_code,
+        "referral_discount_percent": customer.referral_discount_percent,
+        "birthday_discount_available": False,
+        "birthday_discount_amount": customer.birthday_discount_amount,
+        "discounts_applied": [],
+        "selected_services": names,
+        "selected_service_ids": ids,
+    }
+
+
+@app.post("/appointments/check-in", response_model=schemas.CheckInResponse)
+def check_in_for_appointment(
+    payload: schemas.AppointmentCheckInRequest, db: Session = Depends(get_db), device=Depends(require_kiosk_device)
+):
+    """The customer confirmed the appointment shown on the tablet. The Owner is asked AGAIN here (the browser's word is not enough): the
+    appointment must still be the single one for this phone number today. The visit carries the appointment's own services and its code, the
+    existing customer is used (never duplicated, never edited), and tapping twice never creates a second visit."""
+    kiosk_security.throttle("appointment_checkin", str(device.id))
+    found = _appointment_lookup_or_503(payload.phone_number)
+    if found.outcome != "one" or found.appointment.code != payload.appointment_code:
+        raise HTTPException(status_code=409, detail="This appointment has changed. Please ask a staff member for help.")
+    appointment = found.appointment
+    services = [CatalogService(id=service.id, name=service.name) for service in appointment.services]
+
+    customer = db.query(models.Customer).filter(models.Customer.phone_number == payload.phone_number).first()
+    if customer is None:
+        customer = _customer_from_appointment(db, payload.phone_number, appointment.customer_name)
+    existing = _get_visit_today(db, customer.id)
+    if existing is not None:
+        return _response_for_existing_visit(db, customer, existing)
+    return _perform_check_in(db, customer, services, appointment_code=appointment.code)
 
 
 # ----------------------------

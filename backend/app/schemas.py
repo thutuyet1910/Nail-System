@@ -2,7 +2,7 @@ import re
 from datetime import date, datetime
 from typing import Annotated, Optional
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, computed_field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from .timeutils import today_local
 from .phone_normalization import normalize_us_phone
@@ -70,7 +70,7 @@ class CustomerResponse(BaseModel):
     full_name: str
     phone_number: str
     email: Optional[str] = None
-    date_of_birth: date
+    date_of_birth: Optional[date] = None
     referral_code: Optional[str] = None
     referral_count: int = 0
     referral_discount_percent: int
@@ -169,6 +169,7 @@ class TodayCheckInItem(BaseModel):
     discount_type: Optional[str] = None
     discount_value: float = 0
     discount_label: Optional[str] = None
+    appointment_code: Optional[str] = None  # set when the customer confirmed an appointment at the kiosk
 
 
 class TodayCheckInResponse(BaseModel):
@@ -213,6 +214,33 @@ class KioskCustomerLookup(BaseModel):
     phone_number_formatted: str
     email_hint: Optional[str] = None
     has_referral_code: bool = False
+
+
+class AppointmentLookupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    phone_number: Phone
+
+
+class KioskAppointment(BaseModel):
+    """Just enough to recognise the appointment: no profile, no ids, no notes."""
+
+    code: str
+    time: str  # salon-local "YYYY-MM-DDTHH:MM"
+    first_name: str
+    services: list[str] = []
+    technician_name: Optional[str] = None  # None = any technician
+
+
+class KioskAppointmentLookup(BaseModel):
+    outcome: str  # none | one | multiple | staff
+    already_checked_in: bool = False
+    appointment: Optional[KioskAppointment] = None
+
+
+class AppointmentCheckInRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    phone_number: Phone
+    appointment_code: str = Field(min_length=1, max_length=80)
 
 
 class KioskCheckInStatus(BaseModel):

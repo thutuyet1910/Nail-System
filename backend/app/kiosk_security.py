@@ -42,6 +42,8 @@ LIMITS = {
     "device_requests": (120, 60),      # every kiosk call, per device
     "lookup": (20, 60),                # phone lookup + today's status, per device
     "lookup_miss": (15, 600),          # lookups that found nobody (enumeration), per device
+    "appointment_lookup": (20, 60),    # "is there an appointment for this phone number?", per device
+    "appointment_checkin": (10, 60),   # confirming an appointment check-in, per device
     "referral": (10, 60),              # referral validate/apply, per device
     "referral_fail": (10, 600),        # referral calls that failed (code guessing), per device
     "pair_fail_ip": (5, 600),          # wrong/expired pairing codes, per client address

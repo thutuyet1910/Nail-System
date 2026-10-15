@@ -31,6 +31,7 @@ const screens = {
   existing: $("existing-screen"),
   existingServices: $("existing-customer-service-screen"),
   existingReview: $("existing-customer-review-screen"),
+  appointment: $("appointment-screen"),
   updateProfile: $("update-profile-screen"),
   verifyProfile: $("verify-profile-screen"),
   thankYou: $("thank-you-screen")
@@ -99,6 +100,7 @@ let phoneNumber = "";
 let existingCustomer = null;
 let profileEditToken = ""; // short-lived proof that the birth date on file was just entered; never shown or stored
 let pendingNewCustomerPayload = null;
+let pendingAppointment = null; // the one appointment shown for confirmation; only its code ever goes back to the server
 let pendingExistingReferralCode = "";
 let availableServices = [];
 let lastThankYou = null;
@@ -282,10 +284,80 @@ function hideSuccessModal() {
   successModal.classList.add("hidden");
 }
 
-function showThankYouScreen(key, serviceIds) {
-  lastThankYou = { key, ids: [...serviceIds] };
+function showThankYouScreen(key, serviceIds, appointment = null) {
+  lastThankYou = { key, ids: [...serviceIds], appointment };
   showScreen(screens.thankYou);
-  thankYouMessage.textContent = tf(key, { services: formatServiceNamesFromIds(serviceIds) });
+  thankYouMessage.textContent = thankYouText(lastThankYou);
+}
+
+function thankYouText(thanks) {
+  if (thanks.appointment) {
+    return tf(thanks.key, { time: formatAppointmentTime(thanks.appointment.time), services: thanks.appointment.services.join(", ") });
+  }
+  return tf(thanks.key, { services: formatServiceNamesFromIds(thanks.ids) });
+}
+
+// ── Appointment (phone first) ─────────────────────────────────
+
+function formatAppointmentTime(isoLocal) {
+  const when = new Date(isoLocal); // "YYYY-MM-DDTHH:MM" with no zone: read as written, so the tablet shows the salon's clock time
+  return Number.isNaN(when.getTime())
+    ? ""
+    : when.toLocaleTimeString(LOCALE_MAP[currentLanguage] || "en-US", { hour: "numeric", minute: "2-digit" });
+}
+
+function renderAppointmentScreen() {
+  if (!pendingAppointment) return;
+  const a = pendingAppointment;
+  $("appointment-title").textContent = tf("welcomeBack", { name: a.first_name });
+  const row = (label, value) => `
+    <div class="profile-row">
+      <span class="profile-label">${escapeHtml(label)}</span>
+      <span class="profile-value">${escapeHtml(value)}</span>
+    </div>`;
+  // only what is needed to recognise the appointment; always escaped (a name or a service name is plain text)
+  $("appointment-details").innerHTML =
+    row(t("appointmentTimeLabel"), formatAppointmentTime(a.time)) +
+    row(t("services"), a.services.join(", ")) +
+    row(t("appointmentTechnicianLabel"), a.technician_name || t("appointmentAnyTechnician"));
+}
+
+function showAppointmentScreen(appointment) {
+  pendingAppointment = appointment;
+  renderAppointmentScreen();
+  showScreen(screens.appointment);
+  setMessage();
+}
+
+// Asks the server (which asks the Owner) whether today has exactly one appointment for this phone. Returns true when the normal
+// walk-in / returning-customer flow should continue, false when this screen has taken over or stopped with a message.
+async function handleAppointmentLookup() {
+  let lookup;
+  try {
+    lookup = await api("/appointments/lookup", { method: "POST", body: { phone_number: phoneNumber }, fallback: t("appointmentLookupFailed") });
+  } catch (error) {
+    // never "no appointment" for a technical failure: the customer is sent to the front desk
+    setMessage(error.status === 429 || error.status === 401 ? error.message : t("appointmentLookupFailed"), "error");
+    showScreen(screens.phone);
+    return false;
+  }
+
+  if (lookup.outcome === "none") return true;
+
+  if (lookup.outcome === "multiple" || lookup.outcome === "staff") {
+    setMessage(t(lookup.outcome === "multiple" ? "appointmentMultiple" : "appointmentNeedsStaff"), "error");
+    showScreen(screens.phone);
+    return false;
+  }
+
+  if (lookup.already_checked_in) {
+    setMessage(tf("alreadyCheckedIn", { name: lookup.appointment.first_name }), "error");
+    showScreen(screens.phone);
+    return false;
+  }
+
+  showAppointmentScreen(lookup.appointment);
+  return false;
 }
 
 function resetToMainScreen() {
@@ -305,6 +377,7 @@ function resetToMainScreen() {
   existingCustomer = null;
   profileEditToken = "";
   pendingNewCustomerPayload = null;
+  pendingAppointment = null;
   pendingExistingReferralCode = "";
   lastThankYou = null;
 }
@@ -600,6 +673,12 @@ forms.phone.addEventListener("submit", async (event) => {
 
   setMessage(t("checkingPhone"));
 
+  if (!(await handleAppointmentLookup())) return;
+  await continueNormalPhoneFlow();
+});
+
+// The walk-in / returning-customer flow, unchanged: used when there is no appointment today, or the customer says it is not theirs.
+async function continueNormalPhoneFlow() {
   try {
     const response = await kioskFetch(`/customers/by-phone/${encodeURIComponent(phoneNumber)}`);
 
@@ -635,6 +714,43 @@ forms.phone.addEventListener("submit", async (event) => {
     throw new Error(getErrorMessage(data, "Something went wrong while checking phone number."));
   } catch (error) {
     setMessage(error.message || "Failed to check phone number.", "error");
+  }
+}
+
+on("appointment-not-mine-btn", async () => {
+  // nothing is changed on the server: the appointment stays exactly as it was and the normal check-in continues
+  pendingAppointment = null;
+  setMessage(t("checkingPhone"));
+  await continueNormalPhoneFlow();
+});
+
+const appointmentCheckInBtn = $("appointment-checkin-btn");
+appointmentCheckInBtn?.addEventListener("click", async (event) => {
+  event.preventDefault();
+  if (!pendingAppointment || appointmentCheckInBtn.disabled) return;
+  const appointment = pendingAppointment;
+
+  appointmentCheckInBtn.disabled = true; // a second tap while this one is running does nothing
+  setMessage(t("processingCheckIn"));
+  try {
+    const data = await api("/appointments/check-in", {
+      method: "POST",
+      body: { phone_number: phoneNumber, appointment_code: appointment.code },
+      fallback: t("appointmentLookupFailed")
+    });
+    const birthday = data.discounts_applied?.find((d) => d.type === "birthday");
+    setMessage();
+    await loadTodayCheckInOrder();
+    if (birthday) showSuccessModal(tf("successBirthday", { name: data.full_name, amount: birthday.amount }));
+    pendingAppointment = null;
+    showThankYouScreen("thankYouAppointment", [], { time: appointment.time, services: data.selected_services?.length ? data.selected_services : appointment.services });
+  } catch (error) {
+    const text = error.status === 409 ? t("appointmentChanged") : error.status === 429 || error.status === 401 ? error.message : t("appointmentLookupFailed");
+    setMessage(text, "error");
+    pendingAppointment = null;
+    showScreen(screens.phone);
+  } finally {
+    appointmentCheckInBtn.disabled = false;
   }
 });
 
@@ -1043,6 +1159,10 @@ const TEXT_BINDINGS = [
   [".queue-card h2", "todayOrder"],
   [".queue-card .subtitle", "todayOrderSubtitle"],
 
+  ["#appointment-checkin-btn", "checkIn"],
+  ["#appointment-not-mine-btn", "notMyAppointment"],
+  [".appointment-intro", "appointmentFound"],
+
   ["#phone-screen h2", "checkIn"],
   ["#phone-screen .subtitle", "enterPhone"],
   ['#phone-form button[type="submit"]', "continue"],
@@ -1138,10 +1258,12 @@ function refreshDynamicScreens() {
     showExistingCustomerReview();
   }
 
+  if (screens.appointment.style.display === "block") {
+    renderAppointmentScreen();
+  }
+
   if (screens.thankYou.style.display === "block" && lastThankYou) {
-    thankYouMessage.textContent = tf(lastThankYou.key, {
-      services: formatServiceNamesFromIds(lastThankYou.ids)
-    });
+    thankYouMessage.textContent = thankYouText(lastThankYou);
   }
 }
 

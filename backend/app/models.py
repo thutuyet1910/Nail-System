@@ -12,7 +12,7 @@ class Customer(Base):
     full_name = Column(String, nullable=False)
     phone_number = Column(String, unique=True, index=True, nullable=False)
     email = Column(String, nullable=True)
-    date_of_birth = Column(Date, nullable=False)
+    date_of_birth = Column(Date, nullable=True)  # unknown for a customer first recorded from an appointment (see schema_upgrade.py)
 
     # Referral: this customer's own code and the reward they earn from it
     referral_code = Column(String, unique=True, nullable=True)
@@ -60,6 +60,7 @@ class Visit(Base):
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
     visit_date = Column(Date, nullable=False)
     checked_in_at = Column(DateTime, nullable=False, default=now_local)
+    appointment_code = Column(String, nullable=True, index=True)  # the Owner appointment the customer confirmed at the kiosk, if any
     discount_type = Column(String, nullable=True)
     discount_value = Column(Float, nullable=True, default=0)
     discount_label = Column(String, nullable=True)

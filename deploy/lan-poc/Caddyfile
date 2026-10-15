@@ -88,7 +88,7 @@
 
 	@kiosk_post {
 		method POST
-		path_regexp ^/api/checkin/(kiosk/pair|customers/new|customers/check-in/[^/]+|customers/[^/]+/profile-access|referrals/validate|referrals/apply)$
+		path_regexp ^/api/checkin/(kiosk/pair|customers/new|customers/check-in/[^/]+|customers/[^/]+/profile-access|appointments/lookup|appointments/check-in|referrals/validate|referrals/apply)$
 	}
 	handle @kiosk_post {
 		import checkin_backend
