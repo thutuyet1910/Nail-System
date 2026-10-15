@@ -506,7 +506,8 @@ class DpapiSecrets(SecretsProvider):
 # ------------------------------------------------------------------------------------------------
 SID_SYSTEM = "S-1-5-18"
 SID_ADMINISTRATORS = "S-1-5-32-544"
-_FORBIDDEN_PRINCIPALS = ("everyone", "builtin\\users", "nt authority\\authenticated users", "users")
+_BROAD_SIDS = ("S-1-1-0", "S-1-5-11", "S-1-5-32-545")   # Everyone, Authenticated Users, Users
+_FORBIDDEN_PRINCIPALS =("everyone", "builtin\\users", "nt authority\\authenticated users", "users")
 
 
 def current_user_sid() -> str:
@@ -530,8 +531,12 @@ def restrict_directory(path: Path, *, runtime_sid: str | None = None, runtime_ac
     sid = runtime_sid or current_user_sid()
     if not re.fullmatch(r"S-1-[0-9-]+", sid):
         raise RuntimeConfigError(f"{sid!r} is not a Windows SID.")
+    if sid in _BROAD_SIDS:
+        raise RuntimeConfigError(f"{sid} is a broad group (Everyone, Users or Authenticated Users); name the account that runs NailSystem.")
     grants = [f"*{SID_SYSTEM}:(OI)(CI)F", f"*{SID_ADMINISTRATORS}:(OI)(CI)F", f"*{sid}:(OI)(CI){runtime_access}"]
-    command = ["icacls", str(path), "/inheritance:r", "/grant:r", *grants]
+    # /inheritance:r drops what the parent folder passes down (ProgramData lets Users read), but not an entry somebody added to
+    # THIS folder directly; /remove:g takes those out too, so the result never depends on how the folder was created.
+    command = ["icacls", str(path), "/inheritance:r", "/grant:r", *grants, "/remove:g", *(f"*{broad}" for broad in _BROAD_SIDS)]
     result = subprocess.run(command, capture_output=True, text=True, timeout=60)
     if result.returncode != 0:
         raise RuntimeConfigError(f"Could not restrict {path}: {(result.stdout + result.stderr).strip()[:300]}. Run this as an administrator.")

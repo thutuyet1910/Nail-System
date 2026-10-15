@@ -742,6 +742,19 @@ class TestAcls:
         finally:
             subprocess.run(["icacls", str(paths.root), "/reset", "/t", "/q"], capture_output=True)
 
+    def test_an_entry_added_directly_to_the_folder_is_removed_too(self, acl_dir):
+        """Removing inheritance only drops what the parent passes down; a grant made on this very folder must go as well."""
+        for sid in ("S-1-1-0", "S-1-5-11", "S-1-5-32-545"):   # Everyone, Authenticated Users, Users
+            subprocess.run(["icacls", str(acl_dir), "/grant", f"*{sid}:(OI)(CI)RX"], capture_output=True, check=True)
+        assert len(rt.readable_by_everyone(acl_dir)) >= 2
+        rt.restrict_directory(acl_dir, runtime_access="M")
+        assert rt.readable_by_everyone(acl_dir) == []
+
+    def test_a_broad_group_cannot_be_named_as_the_runtime_account(self, acl_dir):
+        for sid in ("S-1-1-0", "S-1-5-11", "S-1-5-32-545"):
+            with pytest.raises(rt.RuntimeConfigError, match="broad group"):
+                rt.restrict_directory(acl_dir, runtime_sid=sid)
+
     def test_a_bad_sid_or_access_level_is_refused_before_anything_is_changed(self, acl_dir):
         with pytest.raises(rt.RuntimeConfigError):
             rt.restrict_directory(acl_dir, runtime_sid="Everyone")
