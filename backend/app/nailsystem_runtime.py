@@ -826,6 +826,31 @@ def _cli_paths(environ) -> RuntimePaths:
     return RuntimePaths(resolve_home(environ, "product"))
 
 
+def _cli_check(app: str, environ) -> int:
+    """Runs the same start-up resolution the app would (on a COPY of the environment, no logging, no folders created in
+    development), and reports whether it would start. Prints names and sources only; exit 0 = would start, 2 = would not."""
+    scratch = dict(environ)
+    report = {"app": app, "ok": False, "mode": None, "problems": [], "warnings": [], "settings": {}, "secrets_present": [], "ignored_environment": []}
+    try:
+        context = _bootstrap(app, scratch, configure_log=False)
+    except RuntimeConfigError as exc:
+        report["problems"].append(str(exc))
+        try:
+            report["mode"] = current_mode(environ)
+        except RuntimeConfigError:
+            pass
+        print(json.dumps(report, indent=2))
+        return 2
+    report.update(mode=context.mode, ok=True, settings=dict(sorted(context.sources.items())),
+                  ignored_environment=sorted(set(context.ignored_env)), warnings=list(context.warnings))
+    report["secrets_present"] = sorted(name for name in SECRET_NAMES[app] if scratch.get(name))
+    missing = [name for name in REQUIRED_SECRETS if not scratch.get(name)]
+    if missing:  # product mode already refused above; in development this is only a heads-up
+        report["warnings"].append("Not set (the two apps cannot talk to each other without it): " + ", ".join(missing))
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 def main(argv=None, environ=None) -> int:
     import argparse
     import getpass
@@ -843,8 +868,12 @@ def main(argv=None, environ=None) -> int:
     secrets_cmd.add_argument("action", choices=["list", "set", "delete", "generate"])
     secrets_cmd.add_argument("name", nargs="?")
     sub.add_parser("acl-check", help="report principals that should not have access")
+    check = sub.add_parser("check", help="validate the configuration and secrets an app would start with (names only, never values)")
+    check.add_argument("--app", required=True, choices=APPS)
     args = parser.parse_args(argv)
 
+    if args.command == "check":
+        return _cli_check(args.app, environ)
     try:
         if args.command == "init" and args.home:
             environ[HOME_ENV] = args.home

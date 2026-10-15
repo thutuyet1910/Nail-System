@@ -11,6 +11,7 @@ Run from the folder that CONTAINS the `app` package:
 
 from datetime import date, timedelta
 import os
+from pathlib import Path
 
 os.environ["CHECKIN_INTERNAL_SERVICE_TOKEN"] = "test-internal-token"
 
@@ -20,7 +21,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
-TEST_DATABASE_URL = "sqlite:///./test_checkin.db"
+# Inside the per-run temporary folder created by backend/conftest.py (never the working directory, never a shared file)
+TEST_DATABASE_URL = "sqlite:///" + (Path(os.environ["NAILSYSTEM_TEST_DB_DIR"]) / "test_checkin.db").as_posix()
 engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # The test database gets the same safety settings as the real one (foreign keys ON, WAL, busy timeout), so a test

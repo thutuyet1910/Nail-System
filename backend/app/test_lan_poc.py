@@ -51,7 +51,7 @@ def _normalise(route: str) -> str:
 def _block(text: str, header: str) -> str:
     """The brace-balanced body of the first block that starts with `header` (e.g. 'http://:8080')."""
     start = text.index(header)
-    open_at = text.index("{", start)
+    open_at = text.index("{", start + len(header))  # the header itself may contain {$PORT} placeholders
     depth = 0
     for index in range(open_at, len(text)):
         if text[index] == "{":
@@ -194,8 +194,8 @@ class TestCaddyLanConfig:
         raw = CADDYFILE.read_text(encoding="utf-8")
         lines = [line for line in raw.splitlines() if not line.strip().startswith("#")]  # comments are not config
         self.text = chr(10).join(lines)
-        self.lan = _block(self.text, "http://:8080")
-        self.loopback = _block(self.text, "http://127.0.0.1:8081")
+        self.lan = _block(self.text, "http://:{$KIOSK_PORT:8080}")
+        self.loopback = _block(self.text, "http://127.0.0.1:{$OWNER_PORT:8081}, http://localhost:{$OWNER_PORT:8081}")
 
     def test_the_lan_listener_is_the_kiosk_and_nothing_else(self):
         assert "bind 0.0.0.0" in self.lan
@@ -357,8 +357,8 @@ class TestCaddyPhaseTwo:
         assert set(directives["img-src"]) == {"'self'", "https://images.unsplash.com", "data:"}
 
     def test_the_policy_is_on_the_kiosk_page_handler_not_on_the_owner_dashboard(self):
-        lan = _block(self.text, "http://:8080")
-        loopback = _block(self.text, "http://127.0.0.1:8081")
+        lan = _block(self.text, "http://:{$KIOSK_PORT:8080}")
+        loopback = _block(self.text, "http://127.0.0.1:{$OWNER_PORT:8081}, http://localhost:{$OWNER_PORT:8081}")
         kiosk = _block(self.text, "(kiosk)")
         assert "Content-Security-Policy" in kiosk
         assert "Content-Security-Policy" not in lan and "Content-Security-Policy" not in loopback
@@ -370,7 +370,7 @@ class TestCaddyPhaseTwo:
         assert not re.search(r"javascript:", html, re.I)
 
     def test_the_owner_listener_never_serves_the_kiosk_policy_or_trusts_the_client_address_header(self):
-        loopback = _block(self.text, "http://127.0.0.1:8081")
+        loopback = _block(self.text, "http://127.0.0.1:{$OWNER_PORT:8081}, http://localhost:{$OWNER_PORT:8081}")
         assert "X-Kiosk-Client-Ip" not in loopback.replace("import kiosk", "")
 
     def test_names_can_not_carry_markup(self):
@@ -379,3 +379,30 @@ class TestCaddyPhaseTwo:
             with pytest.raises(ValueError):
                 CustomerCreate(full_name=bad, phone_number="5550000001", date_of_birth="1990-01-01")
         assert CustomerCreate(full_name="Mary-Ann O'Neil", phone_number="5550000001", date_of_birth="1990-01-01").full_name == "Mary-Ann O'Neil"
+
+
+class TestCaddyLauncherSupport:
+    """What the launcher relies on: configurable listener ports and a loopback-only health path."""
+
+    def setup_method(self):
+        raw = CADDYFILE.read_text(encoding="utf-8")
+        self.text = chr(10).join(line for line in raw.splitlines() if not line.strip().startswith("#"))
+        self.lan = _block(self.text, "http://:{$KIOSK_PORT:8080}")
+        self.loopback = _block(self.text, "http://127.0.0.1:{$OWNER_PORT:8081}, http://localhost:{$OWNER_PORT:8081}")
+
+    def test_the_two_ports_come_from_the_environment_with_the_documented_defaults(self):
+        assert "{$KIOSK_PORT:8080}" in self.text and "{$OWNER_PORT:8081}" in self.text
+        assert not re.search(r"http://[^\s{]*:(8080|8081)\b", self.text), "no port is hard-coded outside the placeholders"
+
+    def test_the_health_path_exists_on_the_loopback_listener_only(self):
+        assert re.search(r"handle /healthz \{\s*respond \"ok\" 200\s*\}", self.loopback)
+        assert "healthz" not in self.lan
+
+    def test_the_health_path_is_not_a_kiosk_route(self):
+        for method, path in (("GET", "/api/checkin/health"), ("GET", "/api/checkin/healthz"), ("GET", "/healthz")):
+            assert not _caddy_allows(method, path)
+
+    def test_the_proxy_needs_no_application_secret(self):
+        for name in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "TWILIO", "OPENAI"):
+            assert not re.search(r"\{\$[A-Z_]*" + name, self.text), name
+        assert set(re.findall(r"\{\$([A-Z_]+)", self.text)) == {"KIOSK_PORT", "OWNER_PORT", "CHECKIN_FRONTEND_DIR", "OWNER_FRONTEND_DIR"}

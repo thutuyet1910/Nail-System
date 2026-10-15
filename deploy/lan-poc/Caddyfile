@@ -9,6 +9,8 @@
 # Both backends stay bound to 127.0.0.1. Server-to-server traffic (X-Internal-Service-Token) goes
 # straight between the backends on loopback and never through this proxy.
 #
+# Optional environment: KIOSK_PORT (default 8080) and OWNER_PORT (default 8081); the launcher passes the values from salon.json.
+#
 # Required environment (absolute paths of the two static frontend folders):
 #   CHECKIN_FRONTEND_DIR   <check-in repo>\frontend
 #   OWNER_FRONTEND_DIR     <owner repo>\frontend
@@ -104,7 +106,7 @@
 # ---------------------------------------------------------------------------------------------
 # LAN listener: tablets. Kiosk only. Everything else is a 404.
 # ---------------------------------------------------------------------------------------------
-http://:8080 {
+http://:{$KIOSK_PORT:8080} {
 	bind 0.0.0.0
 	import security_headers
 
@@ -126,12 +128,17 @@ http://:8080 {
 # ---------------------------------------------------------------------------------------------
 # Loopback listener: this computer only.
 # ---------------------------------------------------------------------------------------------
-http://127.0.0.1:8081, http://localhost:8081 {
+http://127.0.0.1:{$OWNER_PORT:8081}, http://localhost:{$OWNER_PORT:8081} {
 	bind 127.0.0.1
 	import security_headers
 
 	redir / /owner/ 302
 	redir /owner /owner/ 308
+
+	# For the launcher's health check only (this listener is bound to this PC). Not served on the LAN listener.
+	handle /healthz {
+		respond "ok" 200
+	}
 
 	# Internal service routes and the Twilio voice routes never go through the browser proxy.
 	@owner_internal path /api/owner/internal /api/owner/internal/* /api/owner/voice /api/owner/voice/*

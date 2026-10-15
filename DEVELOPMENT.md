@@ -59,6 +59,8 @@ Pairing: the kiosk shows a **Pair this tablet** screen until the owner creates a
 cd <repo>\backend
 python -m pytest app -q                       # full suite (includes the runtime, backup and wiring tests)
 python -m pytest app\test_owner_catalog.py -q # Owner catalog / service ids
+# Tests never open backend\nail_system.db: backend\conftest.py points every run at a throw-away database in a
+# temporary folder before the app is imported (app\test_isolation.py proves it, including a full-suite run).
 node --check ..\frontend\script.js
 node --check ..\frontend\translations.js
 node --check ..\frontend\kiosk-device.js

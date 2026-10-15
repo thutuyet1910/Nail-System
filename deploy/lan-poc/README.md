@@ -1,8 +1,9 @@
 # LAN deployment: kiosk tablet + salon PC (proof of concept, Phase 2: kiosk hardening)
 
 One Windows PC runs both backends and a Caddy reverse proxy. A tablet on the same Wi-Fi opens **only** the
-Check-In kiosk, and only after the salon owner has **paired** it. This is a manual set-up: no installer, no
-launcher, no auto-start.
+Check-In kiosk, and only after the salon owner has **paired** it. This page is the manual, one-window-per-process
+set-up. The `Nail-System-installer-git` repository has a launcher that starts, watches and stops the same three
+processes from one window (no PowerShell); there is still no installer and no auto-start.
 
 ```text
 Tablet --http--> PC :8080 (Caddy, LAN)  ---> /checkin  (static kiosk, strict CSP)

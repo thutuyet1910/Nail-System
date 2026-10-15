@@ -116,6 +116,7 @@ python nailsystem_runtime.py secrets generate CHECKIN_INTERNAL_SERVICE_TOKEN   #
 python nailsystem_runtime.py secrets set OPENAI_API_KEY                         # hidden prompt; never on the command line
 python nailsystem_runtime.py secrets list                                       # names only
 python nailsystem_runtime.py secrets delete OPENAI_API_KEY
+python nailsystem_runtime.py check --app owner      # would this app start? prints names, sources and problems; never a value (exit 0 / 2)
 ```
 
 In the Check-In repository the same tools sit inside the package: run `python app\nailsystem_runtime.py ...` and
@@ -218,6 +219,13 @@ Do not also set `DATABASE_URL` or the token: product mode ignores them (and says
   salon's records). Deleting data must be a separate, explicit, confirmed choice.
 * An upgrade replaces Program Files, takes a `pre-upgrade` backup of both databases, starts the apps (additive, repeatable
   migrations), and rolls back by restoring that backup if start-up fails (launcher/installer phase).
+
+## 11b. Health and the launcher
+
+Both backends answer `GET /health` on loopback with `{"status": "ok", "app": "owner|checkin", "version": ..., "contract_version": 1}`
+(or `503 {"status": "unavailable"}` if the database does not answer): no paths, settings, tokens or counts, and the reverse proxy never
+forwards it. The Windows launcher (the `Nail-System-installer-git` repository) uses it, runs the `check` command above before it
+starts anything, and passes each app only its own settings; in product mode it never holds a secret itself.
 
 ## 12. Not done in this phase
 

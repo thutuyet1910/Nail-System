@@ -8,6 +8,7 @@ from datetime import date
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
@@ -417,6 +418,20 @@ app.include_router(kiosk_router)
 @app.get("/")
 def read_root():
     return {"message": "Nail System API is running"}
+
+
+CONTRACT_VERSION = 1  # the Owner <-> Check-In service contract (internal catalog, service_ids); bumped only on a breaking change
+
+
+@app.get("/health")
+def health(db: Session = Depends(get_db)):
+    """For the launcher's supervision and for a person's quick check. Says only that this process is alive and its
+    database answers: no paths, settings, tokens or counts."""
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception:
+        return JSONResponse(status_code=503, content={"status": "unavailable", "app": "checkin"})
+    return {"status": "ok", "app": "checkin", "version": app.version, "contract_version": CONTRACT_VERSION}
 
 
 # ----------------------------

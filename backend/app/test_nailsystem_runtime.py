@@ -807,3 +807,58 @@ class TestCommandLine:
         context = rt.bootstrap("owner", app_env)
         assert app_env["CHECKIN_INTERNAL_SERVICE_TOKEN"] and context.sources["CHECKIN_INTERNAL_SERVICE_TOKEN"] == "secrets store"
         assert not os.path.exists(os.path.join("C:\\", "ProgramData", "NailSystem", "tests-were-here"))
+
+
+class TestCheckCommand:
+    """`check` is what the launcher runs in a child process before starting an app: names and sources only."""
+
+    def run_check(self, app, env, capsys):
+        code = rt.main(["check", "--app", app], env)
+        return code, json.loads(capsys.readouterr().out)
+
+    @needs_windows
+    def test_an_installed_layout_that_would_start_passes_and_prints_no_value(self, tmp_path, capsys):
+        home, _ = make_layout(tmp_path, extra_secrets={"OPENAI_API_KEY": "openai-value-123456"})
+        env = product_env(home)
+        code, report = self.run_check("owner", env, capsys)
+        assert code == 0 and report["ok"] is True and report["mode"] == "product" and not report["problems"]
+        assert report["secrets_present"] == ["CHECKIN_INTERNAL_SERVICE_TOKEN", "OPENAI_API_KEY"] and report["settings"]["DATABASE_URL"] == "installed layout"
+        assert TOKEN not in json.dumps(report) and "openai-value-123456" not in json.dumps(report)
+
+    @needs_windows
+    def test_it_does_not_change_the_real_environment(self, tmp_path, capsys):
+        home, _ = make_layout(tmp_path)
+        env = product_env(home)
+        before = dict(env)
+        self.run_check("checkin", env, capsys)
+        assert env == before, "the check works on a copy"
+
+    @needs_windows
+    def test_a_missing_required_secret_is_reported_by_name_with_exit_code_2(self, tmp_path, capsys):
+        home, _ = make_layout(tmp_path, token=None)
+        code, report = self.run_check("owner", product_env(home, CHECKIN_INTERNAL_SERVICE_TOKEN="stale-dev-token-123456"), capsys)
+        assert code == 2 and report["ok"] is False and "CHECKIN_INTERNAL_SERVICE_TOKEN" in report["problems"][0]
+        assert "stale-dev-token" not in json.dumps(report)
+
+    def test_a_missing_or_bad_salon_json_is_reported_as_a_problem(self, tmp_path, capsys):
+        home = tmp_path / "NailSystem"
+        code, report = self.run_check("owner", product_env(home), capsys)
+        assert code == 2 and "salon.json was not found" in report["problems"][0] and report["mode"] == "product"
+
+    def test_a_bad_mode_is_reported_not_raised(self, capsys):
+        code, report = self.run_check("owner", {"NAILSYSTEM_MODE": "nonsense"}, capsys)
+        assert code == 2 and "not valid" in report["problems"][0]
+
+    def test_development_without_a_token_passes_with_a_warning(self, capsys):
+        code, report = self.run_check("checkin", {}, capsys)
+        assert code == 0 and report["mode"] == "development" and any("CHECKIN_INTERNAL_SERVICE_TOKEN" in w for w in report["warnings"])
+
+    def test_development_with_a_token_has_no_warning_and_no_value_in_the_report(self, capsys):
+        code, report = self.run_check("owner", {"CHECKIN_INTERNAL_SERVICE_TOKEN": "dev-token-123456789"}, capsys)
+        assert code == 0 and not report["warnings"] and report["secrets_present"] == ["CHECKIN_INTERNAL_SERVICE_TOKEN"]
+        assert "dev-token-123456789" not in json.dumps(report)
+
+    def test_development_does_not_create_any_folder(self, tmp_path, capsys):
+        home = tmp_path / "opt-in"
+        self.run_check("owner", {"NAILSYSTEM_HOME": str(home), "CHECKIN_INTERNAL_SERVICE_TOKEN": "dev-token-123456789"}, capsys)
+        assert not home.exists()
