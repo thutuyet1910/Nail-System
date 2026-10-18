@@ -221,7 +221,7 @@ class TestCaddyLanConfig:
         assert self.text.count("127.0.0.1:8001") == 1 and "127.0.0.1:8001" in self.loopback
 
     def test_the_two_backends_are_only_ever_proxied_on_loopback(self):
-        assert set(re.findall(r"reverse_proxy\s+(\S+)", self.text)) == {"127.0.0.1:8000", "127.0.0.1:8001"}
+        assert set(re.findall(r"reverse_proxy\s+(\S+)", self.text)) == {"127.0.0.1:8000", "127.0.0.1:8001", "127.0.0.1:{$OWNER_BACKEND_PORT:8001}"}  # the last is the voice ingress (same Owner backend)
 
     def test_no_wildcard_cors_no_admin_api_no_access_log_no_secret(self):
         assert "Access-Control-Allow-Origin" not in self.text
@@ -407,4 +407,36 @@ class TestCaddyLauncherSupport:
     def test_the_proxy_needs_no_application_secret(self):
         for name in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "TWILIO", "OPENAI"):
             assert not re.search(r"\{\$[A-Z_]*" + name, self.text), name
-        assert set(re.findall(r"\{\$([A-Z_]+)", self.text)) == {"KIOSK_PORT", "OWNER_PORT", "CHECKIN_FRONTEND_DIR", "OWNER_FRONTEND_DIR"}
+        assert set(re.findall(r"\{\$([A-Z_]+)", self.text)) == {"KIOSK_PORT", "OWNER_PORT", "VOICE_INGRESS_PORT", "OWNER_BACKEND_PORT", "CHECKIN_FRONTEND_DIR", "OWNER_FRONTEND_DIR"}
+
+
+class TestVoiceIngress:
+    """The AI phone line's public entrance: loopback only, three Twilio routes, nothing else (proven with real Caddy by the launcher's voice_ingress_e2e.py)."""
+
+    @property
+    def block(self):
+        text = CADDYFILE.read_text(encoding="utf-8")
+        start = text.index("http://127.0.0.1:{$VOICE_INGRESS_PORT:8082} {")
+        end = text.index("# Loopback listener: this computer only.")
+        return text[start:end]
+
+    def test_it_is_bound_to_loopback_and_is_a_separate_listener_from_the_dashboard(self):
+        assert "bind 127.0.0.1" in self.block and "0.0.0.0" not in self.block
+        assert "8081" not in self.block and "OWNER_PORT" not in self.block
+
+    def test_exactly_the_three_twilio_routes_are_forwarded_with_exact_case_sensitive_paths(self):
+        patterns = re.findall(r"path_regexp (\S+)", self.block)
+        assert patterns == [r"^/voice/twilio/(incoming|status)$", r"^/voice/twilio/media$"]
+        assert re.search(r"@voice_webhooks \{\s*method POST", self.block)
+        assert re.search(r"@voice_media \{\s*method GET[^}]*header Upgrade websocket", self.block, re.S)
+        assert len(re.findall(r"reverse_proxy", self.block)) == 2
+
+    def test_nothing_of_the_dashboard_the_owner_api_or_the_kiosk_is_reachable_there(self):
+        for forbidden in ("/api/owner", "/api/checkin", "/auth", "/settings", "/internal", "/docs", "/openapi", "file_server", "import kiosk", "OWNER_FRONTEND_DIR", "CHECKIN_FRONTEND_DIR", "127.0.0.1:8000"):
+            assert forbidden not in self.block, forbidden
+        assert "respond 404" in self.block   # the catch-all
+
+    def test_it_strips_the_internal_token_limits_the_body_and_logs_nothing(self):
+        assert self.block.count("header_up -X-Internal-Service-Token") == 2
+        assert "max_size 64KB" in self.block
+        assert "log " not in self.block and "log{" not in self.block

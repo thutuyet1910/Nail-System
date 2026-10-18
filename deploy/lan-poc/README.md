@@ -21,6 +21,7 @@ Owner backend --(loopback, X-Internal-Service-Token)--> Check-In backend   (queu
 | Owner backend | `127.0.0.1:8001` | No (bound to loopback) |
 | Caddy, kiosk listener | `0.0.0.0:8080` | **Yes**, kiosk only |
 | Caddy, Owner listener | `127.0.0.1:8081` | No (this PC only) |
+| Caddy, voice ingress | `127.0.0.1:8082` | No (this PC only; the AI phone line's public tunnel points here and nowhere else: three Twilio routes, everything else 404; see the Owner repo's `VOICE_PRODUCTION.md`) |
 
 The browsers use same-origin paths only (`/api/checkin`, `/api/owner`). No IP address, host name or port is
 hard-coded in either frontend; Caddy decides where each path goes.
