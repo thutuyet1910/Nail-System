@@ -71,6 +71,20 @@ SECRET_NAMES = {
 }
 REQUIRED_SECRETS = ("CHECKIN_INTERNAL_SERVICE_TOKEN",)
 ALL_SECRET_NAMES = tuple(sorted({name for names in SECRET_NAMES.values() for name in names}))
+
+# ------------------------------------------------------------------------------------------------
+# WHO OWNS WHICH SECRET (the one place that says so)
+#
+# LOCAL_PROVIDER_ONLY_SECRETS belong to local provider mode (VOICE_MODE=local: development and private tests), where THIS computer talks to Twilio
+# and OpenAI itself. In managed voice mode Nail System's cloud owns those relationships, so a salon process must never read, receive or hold them.
+# SALON_LOCAL_SECRETS (everything else) are the salon's own and are loaded in every mode. This is an audit-by-name list: a new provider credential
+# must be added here, and a test fails if one is added to SECRET_NAMES without being classified.
+# ------------------------------------------------------------------------------------------------
+LOCAL_PROVIDER_ONLY_SECRETS = ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "OPENAI_API_KEY")
+SALON_LOCAL_SECRETS = tuple(sorted(set(ALL_SECRET_NAMES) - set(LOCAL_PROVIDER_ONLY_SECRETS)))
+VOICE_MODE_ENV = "VOICE_MODE"
+VOICE_MODES = ("local", "managed")
+LAUNCHER_SETTINGS_FILE = "launcher-settings.json"
 # Decided explicitly: the Twilio phone NUMBER is public (it is shown in Salon Settings) so it is configuration,
 # not a secret; it stays an environment setting until the voice settings move into salon.json. The Twilio account
 # SID is treated as a secret (it identifies the account).
@@ -82,6 +96,10 @@ class RuntimeConfigError(Exception):
 
 class SecretsError(RuntimeConfigError):
     pass
+
+
+class ProviderSecretPolicyError(SecretsError):
+    """A provider-owned secret was requested while managed voice mode is active. Always a programming error; the message names the secret, never a value."""
 
 
 def _truthy(value: str | None) -> bool:
@@ -663,6 +681,63 @@ def install_sqlite_pragmas(engine) -> None:
 
 
 # ------------------------------------------------------------------------------------------------
+# managed voice policy
+# ------------------------------------------------------------------------------------------------
+def effective_voice_mode(environ=None, home: Path | None = None) -> str:
+    """\"managed\" if EITHER the process environment OR the installation's own config\\launcher-settings.json says so. Managed is the restrictive choice, so
+    each source can only make a process safer: a process started without the variable (a command-line helper, a support tool) is still held to it."""
+    environ = os.environ if environ is None else environ
+    if str(environ.get(VOICE_MODE_ENV, "")).strip().lower() == "managed":
+        return "managed"
+    if home is not None:
+        try:
+            data = json.loads((RuntimePaths(Path(home)).config_dir / LAUNCHER_SETTINGS_FILE).read_text(encoding="utf-8"))
+            section = data.get("owner") if isinstance(data, dict) else None
+            if isinstance(section, dict) and str(section.get(VOICE_MODE_ENV, "")).strip().lower() == "managed":
+                return "managed"
+        except (OSError, ValueError, AttributeError):
+            pass
+    return "local"
+
+
+def secret_names_for(app: str, voice_mode: str) -> tuple:
+    """The secrets an app may load in the given voice mode. Managed: never the provider-owned ones."""
+    names = SECRET_NAMES[_check_app(app)]
+    return tuple(n for n in names if n not in LOCAL_PROVIDER_ONLY_SECRETS) if voice_mode == "managed" else tuple(names)
+
+
+class ManagedSecretsGuard(SecretsProvider):
+    """Wraps a secrets provider. In managed voice mode it REFUSES (fail closed) any request for a provider-owned secret and hides those names, so a future
+    code path cannot quietly make them available. Stored values are never touched: switching back to local mode finds them exactly as they were."""
+
+    def __init__(self, inner: SecretsProvider, voice_mode: str):
+        self._inner, self.voice_mode = inner, voice_mode
+
+    def get(self, name):
+        if self.voice_mode == "managed" and name in LOCAL_PROVIDER_ONLY_SECRETS:
+            raise ProviderSecretPolicyError(f"{name} belongs to local provider mode and is never read in managed voice mode.")
+        return self._inner.get(name)
+
+    def names(self):
+        names = self._inner.names()
+        return [n for n in names if not (self.voice_mode == "managed" and n in LOCAL_PROVIDER_ONLY_SECRETS)]
+
+    def set(self, name, value):
+        self._inner.set(name, value)
+
+    def delete(self, name):
+        return self._inner.delete(name)
+
+
+def scrub_provider_environment(environ, voice_mode: str) -> list:
+    """Managed mode: whatever the source (inherited environment, an override, a stale launcher value), provider-owned variables are removed from THIS
+    process's environment. Returns the names removed (never values)."""
+    if voice_mode != "managed":
+        return []
+    return [name for name in LOCAL_PROVIDER_ONLY_SECRETS if environ.pop(name, None) is not None]
+
+
+# ------------------------------------------------------------------------------------------------
 # bootstrap: decide the mode, load salon.json and the secrets, and fill os.environ before anything else reads it
 # ------------------------------------------------------------------------------------------------
 @dataclass
@@ -677,6 +752,7 @@ class RuntimeContext:
     overridden: list = field(default_factory=list)    # names the environment overrode (NAILSYSTEM_ALLOW_ENV_OVERRIDE)
     warnings: list = field(default_factory=list)
     redactor: Redactor = field(default_factory=Redactor, repr=False)
+    voice_mode: str = "local"                          # "managed": provider-owned secrets were never requested from the store
 
     def describe(self) -> dict:
         """Safe to print or log: names and sources only."""
@@ -765,8 +841,15 @@ def _bootstrap(app: str, environ, *, configure_log: bool) -> RuntimeContext:
         provider = DpapiSecrets(paths.secrets_file)
     elif paths and paths.secrets_file.exists() and sys.platform == "win32":
         provider = DpapiSecrets(paths.secrets_file)
+    voice_mode = effective_voice_mode(environ, home)
+    context.voice_mode = voice_mode
+    if provider is not None:
+        provider = ManagedSecretsGuard(provider, voice_mode)
+    if voice_mode == "managed":
+        environ[VOICE_MODE_ENV] = "managed"             # children and VoiceConfig see the effective mode even when only the installation's settings said so
+        context.ignored_env.extend(scrub_provider_environment(environ, voice_mode))   # BEFORE anything is read: no source may leave a provider secret here
     secret_values = []
-    for name in SECRET_NAMES[app]:
+    for name in secret_names_for(app, voice_mode):      # managed: the provider-owned names are not even asked for
         stored = provider.get(name) if provider else None
         present = bool(environ.get(name))
         if product and not allow_override:
@@ -849,7 +932,8 @@ def _cli_check(app: str, environ) -> int:
         return 2
     report.update(mode=context.mode, ok=True, settings=dict(sorted(context.sources.items())),
                   ignored_environment=sorted(set(context.ignored_env)), warnings=list(context.warnings))
-    report["secrets_present"] = sorted(name for name in SECRET_NAMES[app] if scratch.get(name))
+    report["secrets_present"] = sorted(name for name in secret_names_for(app, context.voice_mode) if scratch.get(name))
+    report["voice_mode"] = context.voice_mode
     missing = [name for name in REQUIRED_SECRETS if not scratch.get(name)]
     if missing:  # product mode already refused above; in development this is only a heads-up
         report["warnings"].append("Not set (the two apps cannot talk to each other without it): " + ", ".join(missing))
