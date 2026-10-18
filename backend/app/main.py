@@ -408,7 +408,7 @@ async def lifespan(app: FastAPI):
         logger.info("Birthday reminder scheduler stopped.")
 
 
-app = FastAPI(title="Nail System API", version="0.3.2", lifespan=lifespan)
+app = FastAPI(title="Nail System API", version="0.3.3", lifespan=lifespan)
 
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://127.0.0.1:5500,http://localhost:5500").split(",") if o.strip()]
 

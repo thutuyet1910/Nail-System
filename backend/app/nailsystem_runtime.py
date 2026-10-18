@@ -63,6 +63,7 @@ SECRET_NAMES = {
         "TWILIO_ACCOUNT_SID",
         "TWILIO_AUTH_TOKEN",
         "OPENAI_API_KEY",
+        "VOICE_AGENT_PRIVATE_KEY",   # managed voice: this installation's own Ed25519 key (never a provider credential; see voice_agent.py)
         "OWNER_BOOTSTRAP_PASSWORD",
         "OWNER_PASSWORD_HASH",
     ),
