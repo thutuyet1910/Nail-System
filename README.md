@@ -1,8 +1,13 @@
-# Nail Salon Customer Check-In System
+# Nail System Check-In
 
-Customer-facing kiosk for a nail salon. Customers enter a phone number, create or confirm their profile, pick services, receive any earned rewards, and join today's live queue. The Owner dashboard (separate repo, `Nail-System-owner-dashboard`) reads that queue to assign technicians.
+**Current version: 0.3.3 · Owner/Check-In contract: 1**
 
-Local setup and day-to-day commands: see [DEVELOPMENT.md](DEVELOPMENT.md). Where a real install keeps its data, settings, secrets, logs
+Check-In is the customer-facing kiosk component of **Nail System**. Customers enter a phone number,
+create or confirm their profile, select services, receive supported rewards, and join today's live
+queue. The **Owner Dashboard** is a separate component repository: it owns the service catalog and
+salon workflow, reads the Check-In queue, and assigns eligible technicians.
+
+Local setup, development, test, and day-to-day commands: see [DEVELOPMENT.md](DEVELOPMENT.md). Where a real install keeps its data, settings, secrets, logs
 and backups (and how development differs): [deploy/RUNTIME.md](deploy/RUNTIME.md).
 
 ## Architecture
@@ -27,6 +32,18 @@ Caddy setup, the allowlist, the privacy risks that remain for this proof of conc
 - Services are selected by the Owner's stable service **id**. For each new visit Check-In stores the Owner id plus a **name snapshot** (the name at check-in time) in `visit_owner_services`.
 - `GET /today-checkins` (internal token required) returns, per visit, `service_ids` (Owner ids) and the legacy `services` name list. The Owner uses the ids to decide technician eligibility.
 - An unknown or deactivated id is rejected at check-in ("please reselect") and is never matched by name or remapped. The Owner applies the same rule on its side.
+
+### Installed network and device model
+
+- The backend binds only to `127.0.0.1:8000`; it is never the LAN-facing service.
+- Caddy exposes the paired kiosk on port `8080`. The Windows firewall rule permits the installed
+  Caddy executable on TCP 8080 for **Private** networks only.
+- Owner, internal-service, administrative, documentation, and voice routes are not exposed through
+  the public kiosk listener. Ports 8000, 8001, 8081, and 8082 are not opened by the Check-In firewall rule.
+- A tablet is paired with a short-lived one-time code created in Owner Dashboard. The resulting
+  device token is stored by the browser and sent on kiosk API calls; the owner can revoke the device.
+- The Owner and Check-In backends authenticate their server-to-server requests with
+  `X-Internal-Service-Token`. That token is never sent to the kiosk browser.
 
 ### Legacy compatibility
 
@@ -106,11 +123,25 @@ SQLite, created on startup with `create_all` plus idempotent additive `ALTER TAB
 ## Current limitations
 
 - **One shared token in both directions.** Recommended for production hardening: separate directional credentials plus rotation.
-- Some public routes (e.g. `GET /customers/by-phone/{phone}`, profile updates) are unauthenticated by phone number, as in the kiosk design; production should add rate limiting / a reverse proxy.
+- Some public routes (e.g. `GET /customers/by-phone/{phone}`, profile updates) are unauthenticated by phone number, as in the kiosk design; production hardening should add rate limiting and request limits at the existing reverse-proxy boundary.
 - No explicit length limits on free-text fields; rely on the reverse proxy for request size.
 - The catalog cache is per process (run a single worker or accept per-worker caches).
 - If the Owner deactivates a service *after* a customer checked in, the Owner flags that queue entry; Check-In does not learn of it.
-- SQLite foreign keys are not enforced by the engine (pragma off); integrity relies on the ORM.
+- SQLite uses WAL, full synchronous durability, a busy timeout, and enforced foreign keys on every connection.
+
+## Repository and release status
+
+Version 0.3.3 at accepted source commit `6857577ea23afec2db3c0789e9a9b8f5c630a820`
+is the Check-In component packaged for Nail System 0.2.8. Installation, Caddy supervision, firewall
+management, backups, and upgrades belong to the separate **Installer / Launcher** repository.
+
+This README update is a **DOCUMENTATION-ONLY POST-BUILD COMMIT**. It does not change the reviewed
+runtime payload or its accepted provenance, and it must not trigger a rebuild of the accepted 0.2.8
+artifacts.
+
+Future hardening includes directional internal credentials and rotation, reverse-proxy rate limits,
+and tighter request-field limits. These are not implemented features. Never commit `.env` files,
+databases, device tokens, customer data, passwords, API keys, or other secrets.
 
 ## Troubleshooting
 
