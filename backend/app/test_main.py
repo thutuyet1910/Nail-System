@@ -759,7 +759,7 @@ class TestReferrals:
         assert fake_emails["referral"][0]["to_email"] == "bob@example.com"
         assert fake_emails["referral"][0]["referrer_name"] == "Alice"
 
-    def test_referral_email_failure_does_not_break_apply(self, monkeypatch):
+    def test_referral_email_failure_does_not_break_apply_or_log_address(self, monkeypatch, caplog):
         def boom(**kwargs):
             raise RuntimeError("smtp down")
         monkeypatch.setattr(main_module, "send_referral_discount_email", boom)
@@ -767,6 +767,7 @@ class TestReferrals:
         register("5550000002", "Bob", "1992-06-20", email="bob@example.com")
         _give_referral_code("5550000001", "ALICE")
         assert apply_referral("5550000002", "ALICE").status_code == 200
+        assert "bob@example.com" not in caplog.text
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1293,7 +1294,7 @@ class TestBirthdayReminders:
         assert customer.birthday_reminder_sent is True
         assert customer.birthday_reminder_sent_date == today_local()
 
-    def test_email_failure_is_skipped_and_not_marked_sent(self, monkeypatch):
+    def test_email_failure_is_skipped_not_marked_sent_and_does_not_log_address(self, monkeypatch, caplog):
         def boom(**kwargs):
             raise RuntimeError("smtp down")
         monkeypatch.setattr(main_module, "send_birthday_email", boom)
@@ -1303,6 +1304,7 @@ class TestBirthdayReminders:
         assert r.json()["sent"] == 0
         assert r.json()["skipped"] == 1
         assert _get_customer("5550000001").birthday_reminder_sent_date is None
+        assert "alice@example.com" not in caplog.text
 
     def test_scheduled_job_uses_the_same_logic(self, fake_emails, monkeypatch):
         """The 9am job and the manual endpoint share process_birthday_reminders()."""

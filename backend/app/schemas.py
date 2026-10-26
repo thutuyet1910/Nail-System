@@ -1,6 +1,6 @@
 import re
 from datetime import date, datetime
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, computed_field, field_validator
 
@@ -99,6 +99,15 @@ class CustomerCandidateResponse(BaseModel):
     id: int
     full_name: str
     phone_e164: str
+
+
+class CommunicationEligibilityResponse(BaseModel):
+    customer_id: int
+    channel: Literal["email", "sms"]
+    purpose: Literal["transactional", "marketing"]
+    eligible: bool
+    reason: str
+    contact_version: Optional[int] = None
 
 
 class UpdatePhoneRequest(BaseModel):

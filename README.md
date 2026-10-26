@@ -97,6 +97,7 @@ backend/
     owner_catalog.py    read-only Owner catalog client + bounded in-memory cache
     config.py           loads backend/.env at import (never overrides real env vars)
     security.py         internal-token dependency (constant-time compare)
+    communication_preferences.py  consent projection/history, suppression and eligibility only (no sending)
     phone_normalization.py, timeutils.py, database.py, email_utils.py, scheduler.py
     conftest.py         fake Owner for tests (no network in tests)
     test_main.py, test_owner_catalog.py
@@ -107,11 +108,17 @@ frontend/               index.html, script.js, translations.js, style.css (stati
 
 Public (kiosk): `GET /services`, `POST /customers/new`, `GET /customers/by-phone/{phone}`, `GET /customers/check-in-status/{phone}`, `POST /customers/check-in/{phone}`, `POST /referrals/validate`, `POST /referrals/apply`, `PATCH /customers/{phone}/update-phone`, `PATCH /customers/{phone}/profile`, `GET /queue-status` (anonymised).
 
-Internal (`X-Internal-Service-Token` required): `GET /today-checkins`, `GET /customers`, `GET /customers/id/{id}`, `GET /customers/{phone}/visits`, `GET /internal/customers/by-phone/{phone}`, `GET /birthday-reminders`, `POST /birthday-reminders/send`.
+Internal (`X-Internal-Service-Token` required): `GET /today-checkins`, `GET /customers`, `GET /customers/id/{id}`, `GET /customers/{phone}/visits`, `GET /internal/customers/by-phone/{phone}`, `GET /internal/customers/{id}/communication-eligibility`, `GET /birthday-reminders`, `POST /birthday-reminders/send`.
+
+## Communication-consent foundation
+
+Check-In is the authority for customer contact and consent. Transactional email, transactional SMS, marketing email and marketing SMS are separate states. Existing customers migrate to `unknown` for all four states; having an email address or phone number is never treated as consent. Immutable events retain the source, policy version and contact version of each decision. A contact change increments that channel's version and resets only that channel to `unknown`, so consent for an old destination cannot authorize a new one. An active suppression overrides an otherwise eligible preference.
+
+The internal eligibility route returns only a boolean, normalized reason and contact version. It never returns a contact value and does not send anything. Phase 1 adds no email/SMS provider, campaign, queue, webhook or bulk consent-mutation capability. The existing birthday/referral email behavior remains a legacy compatibility boundary pending the later transactional/marketing delivery phases.
 
 ## Database
 
-SQLite, created on startup with `create_all` plus idempotent additive `ALTER TABLE ADD COLUMN` helpers; nothing is dropped or rewritten. `visit_owner_services` is the only table added for the shared catalog: `(visit_id, owner_service_id, service_name)` with a unique `(visit_id, owner_service_id)` index. Database files are git-ignored. Back up `backend/nail_system.db` before upgrading a live salon.
+SQLite, created on startup with `create_all` plus idempotent additive migration helpers; existing customer data is not dropped or rewritten. Communication consent uses `customer_communication_preferences`, append-only `communication_consent_events`, and `communication_suppressions`; the legacy migration creates one conservative preference row and four `migration_default` events per customer exactly once. Database files are git-ignored. Back up `backend/nail_system.db` before upgrading a live salon.
 
 ## Security notes
 

@@ -1,8 +1,14 @@
-from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, String
+from datetime import datetime, timezone
+
+from sqlalchemy import Boolean, CheckConstraint, Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, event, text
 from sqlalchemy.orm import relationship
 
 from .database import Base
 from .timeutils import now_local
+
+
+def _utc_now_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class Customer(Base):
@@ -48,6 +54,106 @@ class Customer(Base):
         back_populates="used_by_customer",
         cascade="all, delete-orphan",
     )
+
+    communication_preferences = relationship(
+        "CustomerCommunicationPreference", back_populates="customer", uselist=False, cascade="all, delete-orphan"
+    )
+    communication_consent_events = relationship(
+        "CommunicationConsentEvent", back_populates="customer", cascade="all, delete-orphan"
+    )
+    communication_suppressions = relationship(
+        "CommunicationSuppression", back_populates="customer", cascade="all, delete-orphan"
+    )
+
+
+class CustomerCommunicationPreference(Base):
+    """Current communication eligibility projection. Contact values remain on Customer."""
+
+    __tablename__ = "customer_communication_preferences"
+    __table_args__ = (
+        CheckConstraint("transactional_email_state IN ('unknown', 'enabled', 'disabled')", name="ck_pref_transactional_email"),
+        CheckConstraint("transactional_sms_state IN ('unknown', 'enabled', 'disabled')", name="ck_pref_transactional_sms"),
+        CheckConstraint("marketing_email_state IN ('unknown', 'opted_in', 'opted_out')", name="ck_pref_marketing_email"),
+        CheckConstraint("marketing_sms_state IN ('unknown', 'opted_in', 'opted_out')", name="ck_pref_marketing_sms"),
+        CheckConstraint("email_contact_version >= 1", name="ck_pref_email_contact_version"),
+        CheckConstraint("phone_contact_version >= 1", name="ck_pref_phone_contact_version"),
+    )
+
+    customer_id = Column(Integer, ForeignKey("customers.id", ondelete="CASCADE"), primary_key=True)
+    transactional_email_state = Column(String, nullable=False, default="unknown", server_default="unknown")
+    transactional_sms_state = Column(String, nullable=False, default="unknown", server_default="unknown")
+    marketing_email_state = Column(String, nullable=False, default="unknown", server_default="unknown")
+    marketing_sms_state = Column(String, nullable=False, default="unknown", server_default="unknown")
+    email_contact_version = Column(Integer, nullable=False, default=1, server_default="1")
+    phone_contact_version = Column(Integer, nullable=False, default=1, server_default="1")
+    updated_at_utc = Column(DateTime, nullable=False, default=_utc_now_naive)
+    marketing_revalidation_required = Column(Boolean, nullable=False, default=True, server_default="1")
+
+    customer = relationship("Customer", back_populates="communication_preferences")
+
+
+class CommunicationConsentEvent(Base):
+    """Immutable consent history. Application and database guards reject updates/deletes."""
+
+    __tablename__ = "communication_consent_events"
+    __table_args__ = (
+        CheckConstraint("channel IN ('email', 'sms')", name="ck_consent_event_channel"),
+        CheckConstraint("purpose IN ('transactional', 'marketing')", name="ck_consent_event_purpose"),
+        CheckConstraint(
+            "decision IN ('unknown', 'enabled', 'disabled', 'opted_in', 'opted_out')",
+            name="ck_consent_event_decision",
+        ),
+        CheckConstraint("contact_version >= 1", name="ck_consent_event_contact_version"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True)
+    channel = Column(String, nullable=False, index=True)
+    purpose = Column(String, nullable=False, index=True)
+    decision = Column(String, nullable=False)
+    contact_version = Column(Integer, nullable=False)
+    source = Column(String, nullable=False)
+    policy_version = Column(String, nullable=False)
+    occurred_at_utc = Column(DateTime, nullable=False, default=_utc_now_naive, index=True)
+    actor_type = Column(String, nullable=True)
+    actor_reference = Column(String, nullable=True)
+    idempotency_key = Column(String, nullable=False, unique=True, index=True)
+
+    customer = relationship("Customer", back_populates="communication_consent_events")
+
+
+@event.listens_for(CommunicationConsentEvent, "before_update")
+@event.listens_for(CommunicationConsentEvent, "before_delete")
+def _consent_events_are_immutable(_mapper, _connection, _target):
+    raise ValueError("Communication consent events are immutable")
+
+
+class CommunicationSuppression(Base):
+    __tablename__ = "communication_suppressions"
+    __table_args__ = (
+        CheckConstraint("channel IN ('email', 'sms')", name="ck_communication_suppression_channel"),
+        CheckConstraint("contact_version >= 1", name="ck_communication_suppression_contact_version"),
+        Index(
+            "uq_active_communication_suppression",
+            "customer_id",
+            "channel",
+            "contact_version",
+            unique=True,
+            sqlite_where=text("lifted_at_utc IS NULL"),
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True)
+    channel = Column(String, nullable=False, index=True)
+    contact_version = Column(Integer, nullable=False)
+    reason = Column(String, nullable=False)
+    source = Column(String, nullable=False)
+    created_at_utc = Column(DateTime, nullable=False, default=_utc_now_naive, index=True)
+    lifted_at_utc = Column(DateTime, nullable=True, index=True)
+    provider_reference = Column(String, nullable=True)
+
+    customer = relationship("Customer", back_populates="communication_suppressions")
 
 
 class Visit(Base):

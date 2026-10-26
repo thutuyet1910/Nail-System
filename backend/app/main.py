@@ -5,6 +5,7 @@ import secrets
 import string
 from contextlib import asynccontextmanager
 from datetime import date
+from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +23,7 @@ from .phone_normalization import normalize_us_phone
 from .owner_catalog import CatalogService, CatalogUnavailable, catalog
 from .owner_appointments import AppointmentLookupUnavailable, appointments_client
 from . import schema_upgrade
+from . import communication_preferences
 from .security import require_internal_service
 from . import kiosk_security
 from .kiosk import router as kiosk_router
@@ -36,6 +38,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nail_system")
 
 Base.metadata.create_all(bind=engine)
+communication_preferences.install_immutability_guards(engine)
 
 # ----------------------------
 # Reward settings
@@ -97,6 +100,8 @@ def ensure_unique_indexes() -> None:
 ensure_columns()
 schema_upgrade.make_birth_date_optional(engine)
 ensure_unique_indexes()
+with SessionLocal() as migration_db:
+    communication_preferences.migrate_existing_customers(migration_db)
 
 
 # ----------------------------
@@ -367,7 +372,7 @@ def process_birthday_reminders(db: Session) -> dict:
             customer.birthday_reminder_sent_date = today
             sent_count += 1
         except Exception:
-            logger.exception("Failed to send birthday email to %s", customer.email)
+            logger.exception("Failed to send birthday email for customer id=%s", customer.id)
             skipped_count += 1
 
     db.commit()
@@ -486,7 +491,13 @@ def create_new_customer(
     )
 
     db.add(new_customer)
-    _commit_or_400(db, "Phone number already exists.")
+    try:
+        db.flush()
+        communication_preferences.ensure_customer_preferences(db, new_customer, source="customer_creation_default")
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Phone number already exists.")
     db.refresh(new_customer)
     return new_customer
 
@@ -544,6 +555,27 @@ def get_internal_customer_candidate(
     }
 
 
+@app.get(
+    "/internal/customers/{customer_id}/communication-eligibility",
+    response_model=schemas.CommunicationEligibilityResponse,
+)
+def get_internal_communication_eligibility(
+    customer_id: int,
+    channel: Literal["email", "sms"],
+    purpose: Literal["transactional", "marketing"],
+    db: Session = Depends(get_db),
+    _=Depends(require_internal_service),
+):
+    """Return only an authenticated eligibility decision; never a contact value or delivery action."""
+    customer = db.get(models.Customer, customer_id)
+    if customer is None:
+        raise HTTPException(status_code=404, detail="Customer not found.")
+    decision = communication_preferences.evaluate_eligibility(
+        db, customer, channel=channel, purpose=purpose
+    )
+    return {"customer_id": customer.id, "channel": channel, "purpose": purpose, **decision}
+
+
 @app.patch("/customers/{phone_number}/update-phone", response_model=schemas.CustomerResponse)
 def update_phone_number(
     phone_number: str,
@@ -566,6 +598,9 @@ def update_phone_number(
             detail="That phone number is already in use by another account.",
         )
 
+    communication_preferences.invalidate_changed_contacts(
+        db, customer, new_email=customer.email, new_phone_number=new_phone
+    )
     customer.phone_number = new_phone
     _commit_or_400(db, "That phone number is already in use by another account.")
     db.refresh(customer)
@@ -627,6 +662,9 @@ def update_customer_profile(
             detail="That phone number is already in use by another account.",
         )
 
+    communication_preferences.invalidate_changed_contacts(
+        db, customer, new_email=payload.email, new_phone_number=new_phone
+    )
     customer.full_name = payload.full_name
     customer.phone_number = new_phone
     customer.email = payload.email
@@ -917,6 +955,8 @@ def _customer_from_appointment(db: Session, phone_digits: str, appointment_name:
     )
     db.add(customer)
     try:
+        db.flush()
+        communication_preferences.ensure_customer_preferences(db, customer, source="customer_creation_default")
         db.commit()
     except IntegrityError:  # two taps at once: the other one created them
         db.rollback()
@@ -1063,7 +1103,7 @@ def _apply_referral(db: Session, payload: schemas.ApplyReferralCodeRequest) -> d
                 discount_percent=REFERRED_DISCOUNT_PERCENT,
             )
         except Exception:
-            logger.exception("Failed to send referral discount email to %s", customer.email)
+            logger.exception("Failed to send referral discount email for customer id=%s", customer.id)
 
     return {
         "message": f"Referral code accepted successfully. You received {REFERRED_DISCOUNT_PERCENT}% off today.",
