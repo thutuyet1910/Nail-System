@@ -104,6 +104,14 @@ class CommunicationConsentEvent(Base):
             name="ck_consent_event_decision",
         ),
         CheckConstraint("contact_version >= 1", name="ck_consent_event_contact_version"),
+        CheckConstraint(
+            "source IN ('migration_default', 'customer_creation_default', 'contact_change', 'customer_explicit_choice')",
+            name="ck_consent_event_source",
+        ),
+        CheckConstraint("actor_type IS NULL OR actor_type IN ('system', 'customer', 'owner')", name="ck_consent_event_actor_type"),
+        CheckConstraint("length(policy_version) BETWEEN 1 AND 128", name="ck_consent_event_policy_version_length"),
+        CheckConstraint("actor_reference IS NULL OR length(actor_reference) BETWEEN 1 AND 128", name="ck_consent_event_actor_reference_length"),
+        CheckConstraint("length(idempotency_key) BETWEEN 1 AND 128", name="ck_consent_event_idempotency_key_length"),
     )
 
     id = Column(Integer, primary_key=True)
@@ -133,20 +141,17 @@ class CommunicationSuppression(Base):
     __table_args__ = (
         CheckConstraint("channel IN ('email', 'sms')", name="ck_communication_suppression_channel"),
         CheckConstraint("contact_version >= 1", name="ck_communication_suppression_contact_version"),
-        Index(
-            "uq_active_communication_suppression",
-            "customer_id",
-            "channel",
-            "contact_version",
-            unique=True,
-            sqlite_where=text("lifted_at_utc IS NULL"),
-        ),
+        CheckConstraint("reason IN ('manual', 'hard_bounce')", name="ck_communication_suppression_reason"),
+        CheckConstraint("source IN ('owner', 'provider')", name="ck_communication_suppression_source"),
     )
 
     id = Column(Integer, primary_key=True)
     customer_id = Column(Integer, ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True)
     channel = Column(String, nullable=False, index=True)
     contact_version = Column(Integer, nullable=False)
+    # Nullable only so Phase-1 rows whose historical destination is no longer
+    # available can be retained. A database trigger rejects NULL for new rows.
+    destination_fingerprint = Column(String(80), nullable=True)
     reason = Column(String, nullable=False)
     source = Column(String, nullable=False)
     created_at_utc = Column(DateTime, nullable=False, default=_utc_now_naive, index=True)

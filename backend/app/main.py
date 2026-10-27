@@ -5,9 +5,9 @@ import secrets
 import string
 from contextlib import asynccontextmanager
 from datetime import date
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Path, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -39,6 +39,7 @@ logger = logging.getLogger("nail_system")
 
 Base.metadata.create_all(bind=engine)
 communication_preferences.install_immutability_guards(engine)
+communication_preferences.install_consent_hardening(engine)
 
 # ----------------------------
 # Reward settings
@@ -560,7 +561,7 @@ def get_internal_customer_candidate(
     response_model=schemas.CommunicationEligibilityResponse,
 )
 def get_internal_communication_eligibility(
-    customer_id: int,
+    customer_id: Annotated[int, Path(ge=1, le=9223372036854775807)],
     channel: Literal["email", "sms"],
     purpose: Literal["transactional", "marketing"],
     db: Session = Depends(get_db),
